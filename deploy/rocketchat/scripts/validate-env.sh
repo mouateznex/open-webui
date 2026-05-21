@@ -140,12 +140,30 @@ for v in WEBUI_URL ROCKETCHAT_PUBLIC_URL ROCKETCHAT_BASE_URL OAUTH_SERVER_REDIRE
 done
 echo
 
-echo "[8] Image tag is pinned (not :latest)"
-tag="$(get ROCKETCHAT_TAG)"
-case "$tag" in
-  latest|"" ) fail "ROCKETCHAT_TAG must be a pinned version, not '$tag'" ;;
-  *) ok "ROCKETCHAT_TAG=$tag" ;;
-esac
+echo "[8] Image tags are pinned (not :latest, prefer exact patch x.y.z)"
+# $1 = var name, $2 = "required" | "optional" (optional => empty falls back to a
+# pinned compose default, so empty is acceptable)
+check_tag() {
+  local name="$1"; local req="$2"; local tag; tag="$(get "$name")"
+  if [ -z "$tag" ]; then
+    if [ "$req" = "required" ]; then
+      fail "$name must be set to a pinned version"
+    else
+      ok "$name unset — pinned compose default applies"
+    fi
+    return
+  fi
+  case "$tag" in
+    latest )
+      fail "$name must be a pinned version, not 'latest'" ;;
+    *[0-9].*[0-9].*[0-9]* )
+      ok "$name=$tag (pinned to patch)" ;;
+    * )
+      warn "$name=$tag is not an exact patch version (x.y.z) — a floating minor like '7.0' is not fully reproducible" ;;
+  esac
+}
+check_tag ROCKETCHAT_TAG required
+check_tag MONGO_TAG optional
 echo
 
 echo "==========================================================="

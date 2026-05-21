@@ -116,10 +116,20 @@ foreach ($v in @("WEBUI_URL","ROCKETCHAT_PUBLIC_URL","ROCKETCHAT_BASE_URL","OAUT
 }
 Write-Host ""
 
-Write-Host "[8] Image tag is pinned (not :latest)"
-$tag = Get-Val "ROCKETCHAT_TAG"
-if ($tag -eq "latest" -or [string]::IsNullOrEmpty($tag)) { Fail "ROCKETCHAT_TAG must be a pinned version, not '$tag'" }
-else { Ok "ROCKETCHAT_TAG=$tag" }
+Write-Host "[8] Image tags are pinned (not :latest, prefer exact patch x.y.z)"
+function Check-Tag($name, $required) {
+    $tag = Get-Val $name
+    if ([string]::IsNullOrEmpty($tag)) {
+        if ($required) { Fail "$name must be set to a pinned version" }
+        else { Ok "$name unset - pinned compose default applies" }
+        return
+    }
+    if ($tag -eq "latest") { Fail "$name must be a pinned version, not 'latest'" }
+    elseif ($tag -match '^\d+\.\d+\.\d+') { Ok "$name=$tag (pinned to patch)" }
+    else { Warn "$name=$tag is not an exact patch version (x.y.z) - a floating minor like '7.0' is not fully reproducible" }
+}
+Check-Tag "ROCKETCHAT_TAG" $true
+Check-Tag "MONGO_TAG" $false
 Write-Host ""
 
 Write-Host "==========================================================="

@@ -25,11 +25,18 @@ services:
   # Open WebUI — declare dependency on Rocket.Chat (bundled case only)
   # This block is intentionally in compose.yaml (not the override) so that
   # the external-RC path (override alone) does not add an undefined depends_on.
+  #
+  # required: false makes the package forgiving — if someone includes this file
+  # but forgets --profile rocketchat, Compose will NOT error with
+  # "depends on undefined service rocketchat"; open-webui simply starts without
+  # waiting (the backend retries the RC connection with backoff anyway). With
+  # the profile active, the service_healthy wait is still applied.
   # -------------------------------------------------------------------------
   open-webui:
     depends_on:
       rocketchat:
         condition: service_healthy
+        required: false
 
   # -------------------------------------------------------------------------
   # MongoDB — required datastore for Rocket.Chat (replica set for oplog)
