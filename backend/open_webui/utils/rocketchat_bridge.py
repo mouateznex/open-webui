@@ -13,6 +13,14 @@ Direction OW → RC
   It posts the message to Rocket.Chat via REST (chat.sendMessage) with
   customFields.ow_origin = True so the DDP echo is suppressed.
 
+Presence (Phase 5)
+  A single stream-notify-logged subscription receives status changes for all
+  users. On each event, the matching Open WebUI user's presence_state is
+  updated in the DB and broadcast via Socket.IO to every tab that user has
+  open (room user:{id}).
+
+  RC status codes: 0=offline, 1=online, 2=away, 3=busy
+
 Subscription management
   subscribe_channel() is called by the channel router every time a new Open
   WebUI channel gets a Rocket.Chat room ID assigned.
@@ -25,10 +33,10 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# RC → OW: messages that carried ow_origin=True are echoes from our own REST
-# posts.  We suppress them in the DDP handler using this custom field rather
-# than a TTL set, which is simpler and perfectly reliable.
 _OW_ORIGIN_FIELD = 'ow_origin'
+
+# RC status code → Open WebUI presence_state string
+_RC_STATUS_MAP = {0: 'offline', 1: 'online', 2: 'away', 3: 'busy'}
 
 
 class RocketChatBridge:
@@ -36,8 +44,10 @@ class RocketChatBridge:
         self._ddp = None
         # Maps RC room ID → Open WebUI channel ID
         self._room_to_channel: dict[str, str] = {}
-        # Maps RC room ID → DDP subscription ID (for unsubscribe)
+        # Maps RC room ID → DDP subscription ID
         self._room_to_sub: dict[str, str] = {}
+        # Maps RC user ID → Open WebUI user ID (built at start, updated on provision)
+        self._rc_to_ow_user: dict[str, str] = {}
         self._running = False
 
     # ------------------------------------------------------------------
@@ -62,7 +72,9 @@ class RocketChatBridge:
             log.warning('Rocket.Chat bridge failed to start: %s', e)
             return
 
+        await self._build_user_map()
         await self._subscribe_existing_channels()
+        await self._subscribe_presence()
         self._running = True
         log.info('Rocket.Chat real-time bridge running')
 
@@ -72,11 +84,32 @@ class RocketChatBridge:
             await self._ddp.close()
 
     # ------------------------------------------------------------------
-    # Subscription management
+    # User ID reverse map
+    # ------------------------------------------------------------------
+
+    async def _build_user_map(self) -> None:
+        """Load rc_user_id → ow_user_id from cached info on all OW users."""
+        from open_webui.models.users import Users
+        try:
+            users = await Users.get_users()
+            for u in users:
+                rc_id = (u.info or {}).get('rocketchat_user_id')
+                if rc_id:
+                    self._rc_to_ow_user[rc_id] = u.id
+            log.info('Bridge user map loaded (%d RC↔OW mappings)', len(self._rc_to_ow_user))
+        except Exception as e:
+            log.warning('Bridge could not build user map: %s', e)
+
+    def register_user(self, rc_user_id: str, ow_user_id: str) -> None:
+        """Called by rocketchat_sync after a new user is provisioned."""
+        self._rc_to_ow_user[rc_user_id] = ow_user_id
+
+    # ------------------------------------------------------------------
+    # Subscription management — channels
     # ------------------------------------------------------------------
 
     async def subscribe_channel(self, room_id: str, channel_id: str) -> None:
-        """Called by the channel router after sync_channel_create assigns a room ID."""
+        """Called by sync_channel_create after a room ID is assigned."""
         if not self._ddp or not self._ddp.connected:
             return
         self._room_to_channel[room_id] = channel_id
@@ -89,7 +122,6 @@ class RocketChatBridge:
         log.debug('Bridge subscribed to RC room %s (channel %s)', room_id, channel_id)
 
     async def _subscribe_existing_channels(self) -> None:
-        """On bridge start, subscribe to all channels that already have a room ID."""
         from open_webui.models.channels import Channels
         try:
             channels = await Channels.get_channels()
@@ -102,7 +134,59 @@ class RocketChatBridge:
             log.warning('Bridge could not load existing channels: %s', e)
 
     # ------------------------------------------------------------------
-    # RC → OW (inbound)
+    # Subscription management — presence (Phase 5)
+    # ------------------------------------------------------------------
+
+    async def _subscribe_presence(self) -> None:
+        """Subscribe to the global user-status stream for online/away/offline events."""
+        if not self._ddp or not self._ddp.connected:
+            return
+        await self._ddp.subscribe(
+            'stream-notify-logged',
+            ['user-status', {'useCollection': False, 'args': []}],
+            self._on_presence_changed,
+        )
+        log.debug('Bridge subscribed to stream-notify-logged (user-status)')
+
+    async def _on_presence_changed(self, data: dict) -> None:
+        """
+        Handles: stream-notify-logged / user-status
+        Payload args: [[rc_user_id, username, status_code, statusText], ...]
+        """
+        fields = data.get('fields', {})
+        if fields.get('eventName') != 'user-status':
+            return
+
+        for entry in fields.get('args', []):
+            if not isinstance(entry, list) or len(entry) < 3:
+                continue
+            rc_user_id, _username, status_code = entry[0], entry[1], entry[2]
+            status_text = entry[3] if len(entry) > 3 else ''
+
+            ow_user_id = self._rc_to_ow_user.get(rc_user_id)
+            if not ow_user_id:
+                continue
+
+            presence = _RC_STATUS_MAP.get(status_code, 'offline')
+            asyncio.create_task(self._apply_presence(ow_user_id, presence, status_text))
+
+    async def _apply_presence(self, ow_user_id: str, presence: str, status_text: str) -> None:
+        """Persist presence change in OW DB and broadcast to the user's Socket.IO room."""
+        try:
+            from open_webui.models.users import Users
+            await Users.update_user_by_id(ow_user_id, {'presence_state': presence})
+
+            from open_webui.socket.main import sio
+            await sio.emit(
+                'user:presence',
+                {'user_id': ow_user_id, 'presence': presence, 'status_text': status_text},
+                to=f'user:{ow_user_id}',
+            )
+        except Exception as e:
+            log.warning('Bridge _apply_presence error for user %s: %s', ow_user_id, e)
+
+    # ------------------------------------------------------------------
+    # RC → OW (inbound messages)
     # ------------------------------------------------------------------
 
     async def _on_room_message(self, data: dict) -> None:
@@ -126,37 +210,35 @@ class RocketChatBridge:
         if not content:
             return
 
-        # Resolve the RC user to an Open WebUI user
-        rc_user_info = rc_msg.get('u', {})
-        ow_user = await self._resolve_ow_user(rc_user_info)
+        ow_user = await self._resolve_ow_user(rc_msg.get('u', {}))
         if ow_user is None:
             return
 
-        # Persist in Open WebUI
         message = await self._store_message(channel_id, ow_user.id, content, rc_msg.get('_id'))
         if message is None:
             return
 
-        # Broadcast to connected browsers via Socket.IO
         await self._emit_message(channel_id, message, ow_user)
 
     async def _resolve_ow_user(self, rc_user_info: dict):
-        """Look up the Open WebUI user by the email stored in the RC user record.
-        RC's stream-room-messages includes the `emails` array on the `u` object
-        only if the user has one; fall back to username-based lookup otherwise."""
+        """
+        Resolve an RC user dict to an Open WebUI UserModel.
+        Tries: cached RC user ID map → email field → email lookup by RC API.
+        """
         from open_webui.models.users import Users
 
-        emails = rc_user_info.get('emails', [])
-        if emails:
-            email = emails[0].get('address', '')
-            if email:
-                return await Users.get_user_by_email(email)
+        # Fast path: cached map
+        rc_user_id = rc_user_info.get('_id')
+        if rc_user_id:
+            ow_user_id = self._rc_to_ow_user.get(rc_user_id)
+            if ow_user_id:
+                return await Users.get_user_by_id(ow_user_id)
 
-        # Fallback: look up by username as email prefix (imprecise but useful
-        # when email is not present in the DDP payload)
-        username = rc_user_info.get('username', '')
-        if username:
-            return await Users.get_user_by_username(username)
+        # Slow path: email embedded in the DDP payload
+        for email_obj in rc_user_info.get('emails', []):
+            address = email_obj.get('address', '')
+            if address:
+                return await Users.get_user_by_email(address)
 
         return None
 
@@ -194,13 +276,12 @@ class RocketChatBridge:
             log.warning('Bridge _emit_message error: %s', e)
 
     # ------------------------------------------------------------------
-    # OW → RC (outbound)
+    # OW → RC (outbound messages)
     # ------------------------------------------------------------------
 
     async def forward_to_rc(self, channel_id: str, content: str, ow_message_id: str) -> None:
         """
         Forward an Open WebUI message to Rocket.Chat.
-        Called by the channel router after post_new_message succeeds.
         The ow_origin custom field prevents the DDP echo from being re-stored.
         """
         if not self._running:

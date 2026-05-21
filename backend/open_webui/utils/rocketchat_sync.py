@@ -92,7 +92,11 @@ async def ensure_user(user: UserModel) -> None:
                 password=secrets.token_urlsafe(32),
                 roles=_rc_roles(user.role),
             )
-            await _cache_rc_id(user.id, new_user['_id'], user.info)
+            rc_id = new_user['_id']
+            await _cache_rc_id(user.id, rc_id, user.info)
+            # Register in the real-time bridge map so presence events resolve correctly
+            from open_webui.utils.rocketchat_bridge import get_bridge
+            get_bridge().register_user(rc_id, user.id)
             log.info('Rocket.Chat account provisioned for %s', user.email)
         else:
             # Account exists — ensure role is correct
@@ -333,3 +337,41 @@ async def sync_channel_delete(channel: ChannelModel) -> None:
         log.warning('Rocket.Chat sync_channel_delete failed for "%s": %s', channel.name, e)
     except Exception as e:
         log.warning('Rocket.Chat sync_channel_delete unexpected error for "%s": %s', channel.name, e)
+
+
+# ---------------------------------------------------------------------------
+# Status / presence sync (Phase 5)
+# ---------------------------------------------------------------------------
+
+# Maps Open WebUI presence states to Rocket.Chat status strings
+_OW_TO_RC_STATUS = {
+    'online': 'online',
+    'away': 'away',
+    'busy': 'busy',
+    'offline': 'offline',
+}
+
+
+async def sync_user_status(user: UserModel, status_message: Optional[str] = None) -> None:
+    """
+    Called when a user updates their status in Open WebUI.
+    Pushes the status message (and presence state if set) to Rocket.Chat.
+    """
+    if not is_configured():
+        return
+
+    try:
+        rc = get_client()
+        rc_id = await _get_rc_user_id(user)
+        if rc_id is None:
+            log.debug('Rocket.Chat sync_user_status: no RC account for %s, skipping', user.email)
+            return
+
+        rc_status = _OW_TO_RC_STATUS.get(user.presence_state or '', 'online')
+        await rc.set_user_status(rc_id, rc_status, message=status_message)
+        log.info('Rocket.Chat status synced for %s → %s', user.email, rc_status)
+
+    except RocketChatError as e:
+        log.warning('Rocket.Chat sync_user_status failed for %s: %s', user.email, e)
+    except Exception as e:
+        log.warning('Rocket.Chat sync_user_status unexpected error for %s: %s', user.email, e)

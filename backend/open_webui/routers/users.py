@@ -359,6 +359,7 @@ async def update_user_status_by_session_user(
     # user already fetched by get_verified_user — no need to refetch
     updated = await Users.update_user_status_by_id(user.id, form_data, db=db)
     if updated:
+        asyncio.create_task(rc_sync.sync_user_status(updated, status_message=form_data.status_message))
         return updated
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,

@@ -246,6 +246,23 @@ class RocketChatClient:
         return body.get('message', {})
 
     # ------------------------------------------------------------------
+    # Presence / status (used by Phase 5)
+    # ------------------------------------------------------------------
+
+    async def set_user_status(
+        self,
+        rc_user_id: str,
+        status: str,
+        message: Optional[str] = None,
+    ) -> bool:
+        """Set a user's status in Rocket.Chat (admin-level call)."""
+        payload: dict = {'userId': rc_user_id, 'status': status}
+        if message is not None:
+            payload['message'] = message
+        await self._post('users.setStatus', payload)
+        return True
+
+    # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
 
