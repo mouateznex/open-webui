@@ -107,6 +107,7 @@ from open_webui.routers import (
     automations,
     calendar,
     oauth_server,
+    rocketchat_integrations,
 )
 
 from open_webui.routers.retrieval import (
@@ -542,6 +543,8 @@ from open_webui.env import (
     ROCKETCHAT_URL,
     ROCKETCHAT_ADMIN_USER,
     ROCKETCHAT_ADMIN_PASSWORD,
+    ROCKETCHAT_SLASH_TOKEN,
+    ROCKETCHAT_SLASH_MODEL,
 )
 
 
@@ -1447,6 +1450,10 @@ app.mount('/ws', socket_app)
 #            /.well-known/openid-configuration
 app.include_router(oauth_server.router, tags=['oauth-server'])
 
+# Rocket.Chat Integrations — outgoing webhook / slash command handler.
+# Endpoint: POST /rocketchat/slash
+app.include_router(rocketchat_integrations.router, tags=['rocketchat'])
+
 app.include_router(ollama.router, prefix='/ollama', tags=['ollama'])
 app.include_router(openai.router, prefix='/openai', tags=['openai'])
 
@@ -2303,6 +2310,7 @@ async def get_app_config(request: Request):
                     'enable_admin_chat_access': ENABLE_ADMIN_CHAT_ACCESS,
                     'enable_admin_analytics': ENABLE_ADMIN_ANALYTICS,
                     'rocketchat_enabled': bool(ROCKETCHAT_URL and ROCKETCHAT_ADMIN_USER and ROCKETCHAT_ADMIN_PASSWORD),
+                    'rocketchat_slash_enabled': bool(ROCKETCHAT_SLASH_TOKEN),
                     'enable_google_drive_integration': app.state.config.ENABLE_GOOGLE_DRIVE_INTEGRATION,
                     'enable_onedrive_integration': app.state.config.ENABLE_ONEDRIVE_INTEGRATION,
                     'enable_memories': app.state.config.ENABLE_MEMORIES,

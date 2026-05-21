@@ -1080,3 +1080,10 @@ ROCKETCHAT_URL = os.environ.get('ROCKETCHAT_URL', '')
 # Service-account credentials — a dedicated admin bot, not a real user account.
 ROCKETCHAT_ADMIN_USER = os.environ.get('ROCKETCHAT_ADMIN_USER', '')
 ROCKETCHAT_ADMIN_PASSWORD = os.environ.get('ROCKETCHAT_ADMIN_PASSWORD', '')
+
+# Shared secret that RC outgoing webhooks must include in the `token` field.
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+ROCKETCHAT_SLASH_TOKEN = os.environ.get('ROCKETCHAT_SLASH_TOKEN', '')
+
+# Which AI model to use for /ask replies. Empty = use the app's default model.
+ROCKETCHAT_SLASH_MODEL = os.environ.get('ROCKETCHAT_SLASH_MODEL', '')

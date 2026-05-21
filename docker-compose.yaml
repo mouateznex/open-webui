@@ -35,6 +35,9 @@ services:
       - 'ROCKETCHAT_URL=http://rocketchat:3000'
       - 'ROCKETCHAT_ADMIN_USER=${ROCKETCHAT_ADMIN_USER-rc_admin}'
       - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD-change-me-in-production}'
+      # Rocket.Chat outgoing webhook token for /rocketchat/slash (AI slash commands)
+      - 'ROCKETCHAT_SLASH_TOKEN=${ROCKETCHAT_SLASH_TOKEN-}'
+      - 'ROCKETCHAT_SLASH_MODEL=${ROCKETCHAT_SLASH_MODEL-}'
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
