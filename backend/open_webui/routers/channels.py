@@ -64,6 +64,7 @@ from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_permission, filter_allowed_access_grants
 from open_webui.utils import rocketchat_sync as rc_sync
+from open_webui.utils.rocketchat_bridge import get_bridge as _rc_bridge
 from open_webui.utils.webhook import post_webhook
 from open_webui.utils.channels import extract_mentions, replace_mentions
 from open_webui.internal.db import get_async_session
@@ -1152,6 +1153,11 @@ async def post_new_message(
             )
 
         background_tasks.add_task(background_handler)
+
+        # Forward the message to Rocket.Chat (OW → RC direction)
+        asyncio.create_task(
+            _rc_bridge().forward_to_rc(channel.id, message.content, message.id)
+        )
 
         return message
 

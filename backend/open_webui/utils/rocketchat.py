@@ -229,6 +229,23 @@ class RocketChatClient:
         return body.get('group', {})
 
     # ------------------------------------------------------------------
+    # Messaging (used by Phase 4 bridge)
+    # ------------------------------------------------------------------
+
+    async def send_message(
+        self,
+        room_id: str,
+        text: str,
+        custom_fields: Optional[dict] = None,
+    ) -> dict:
+        """Post a message to a Rocket.Chat room via REST."""
+        payload: dict = {'rid': room_id, 'msg': text}
+        if custom_fields:
+            payload['customFields'] = custom_fields
+        body = await self._post('chat.sendMessage', {'message': payload})
+        return body.get('message', {})
+
+    # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
 

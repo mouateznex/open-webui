@@ -744,6 +744,13 @@ async def lifespan(app: FastAPI):
     from open_webui.utils import rocketchat as rc
     rc.init(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
 
+    # Rocket.Chat real-time bridge — DDP WebSocket connection
+    from open_webui.utils.rocketchat_bridge import get_bridge
+    if rc.is_configured():
+        asyncio.create_task(
+            get_bridge().start(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
+        )
+
     # Mark application as ready to accept traffic from a startup perspective.
     app.state.startup_complete = True
 
@@ -753,6 +760,10 @@ async def lifespan(app: FastAPI):
     from open_webui.utils.session_pool import close_session
 
     await close_session()
+
+    # Stop the Rocket.Chat real-time bridge
+    from open_webui.utils.rocketchat_bridge import get_bridge
+    await get_bridge().stop()
 
     # Close the Rocket.Chat HTTP client cleanly
     from open_webui.utils import rocketchat as rc

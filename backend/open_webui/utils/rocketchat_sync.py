@@ -255,6 +255,10 @@ async def sync_channel_create(channel: ChannelModel) -> None:
             else:
                 await rc.set_channel_description(room_id, channel.description)
 
+        # Start listening for real-time messages in this room
+        from open_webui.utils.rocketchat_bridge import get_bridge
+        await get_bridge().subscribe_channel(room_id, channel.id)
+
         log.info('Rocket.Chat room created for channel "%s" (roomId=%s)', channel.name, room_id)
 
     except RocketChatError as e:
