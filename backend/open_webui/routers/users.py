@@ -675,6 +675,35 @@ async def delete_user_by_id(user_id: str, user=Depends(get_admin_user), db: Asyn
 
 
 ############################
+# RocketChat User Active Status
+############################
+
+
+class RocketChatActiveForm(BaseModel):
+    active: bool
+
+
+@router.post('/{user_id}/rocketchat/active', response_model=bool)
+async def set_rocketchat_user_active(
+    user_id: str,
+    form_data: RocketChatActiveForm,
+    session_user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    from open_webui.utils.rocketchat import is_configured
+
+    if not is_configured():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Rocket.Chat is not configured')
+
+    target_user = await Users.get_user_by_id(user_id, db=db)
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.USER_NOT_FOUND)
+
+    await rc_sync.set_user_active(target_user, form_data.active)
+    return True
+
+
+############################
 # GetUserGroupsById
 ############################
 

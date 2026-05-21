@@ -12,7 +12,7 @@
 
 	import { toast } from 'svelte-sonner';
 
-	import { updateUserRole, getUsers, deleteUserById } from '$lib/apis/users';
+	import { updateUserRole, getUsers, deleteUserById, setRocketChatUserActive } from '$lib/apis/users';
 
 	import Pagination from '$lib/components/common/Pagination.svelte';
 	import ChatBubbles from '$lib/components/icons/ChatBubbles.svelte';
@@ -42,6 +42,9 @@
 	let users = null;
 	let total = null;
 
+	// Tracks RC suspension state toggled in this session: userId → true (suspended) | false (active)
+	let rcSuspendedState: Record<string, boolean> = {};
+
 	let query = '';
 	let searchDebounceTimer: ReturnType<typeof setTimeout>;
 	let orderBy = 'created_at'; // default sort key
@@ -54,6 +57,28 @@
 
 	let showUserChatsModal = false;
 	let showEditUserModal = false;
+
+	const toggleRocketChatActive = async (userId: string) => {
+		// Default assumption: user is active until we've suspended them in this session
+		const currentlySuspended = rcSuspendedState[userId] ?? false;
+		const newActive = currentlySuspended; // if suspended, activate; if active, suspend
+
+		const res = await setRocketChatUserActive(localStorage.token, userId, newActive).catch(
+			(error) => {
+				toast.error(`${error}`);
+				return null;
+			}
+		);
+
+		if (res !== null) {
+			rcSuspendedState = { ...rcSuspendedState, [userId]: !newActive };
+			toast.success(
+				newActive
+					? $i18n.t('User unsuspended in Rocket.Chat')
+					: $i18n.t('User suspended in Rocket.Chat')
+			);
+		}
+	};
 
 	const deleteUserHandler = async (id) => {
 		const res = await deleteUserById(localStorage.token, id).catch((error) => {
@@ -450,6 +475,59 @@
 										</svg>
 									</button>
 								</Tooltip>
+
+								{#if $config?.features?.rocketchat_enabled && user.role !== 'admin'}
+									{@const isSuspended = rcSuspendedState[user.id] ?? false}
+									<Tooltip
+										content={isSuspended
+											? $i18n.t('Unsuspend in Rocket.Chat')
+											: $i18n.t('Suspend in Rocket.Chat')}
+									>
+										<button
+											class="self-center w-fit text-sm px-2 py-2 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl {isSuspended
+												? 'text-green-500'
+												: 'text-orange-400'}"
+											aria-label={isSuspended
+												? $i18n.t('Unsuspend in Rocket.Chat')
+												: $i18n.t('Suspend in Rocket.Chat')}
+											on:click={() => toggleRocketChatActive(user.id)}
+										>
+											{#if isSuspended}
+												<!-- Unsuspend icon: check-circle -->
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke-width="1.5"
+													stroke="currentColor"
+													class="w-4 h-4"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+													/>
+												</svg>
+											{:else}
+												<!-- Suspend icon: no-symbol / ban -->
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke-width="1.5"
+													stroke="currentColor"
+													class="w-4 h-4"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636"
+													/>
+												</svg>
+											{/if}
+										</button>
+									</Tooltip>
+								{/if}
 
 								{#if user.role !== 'admin'}
 									<Tooltip content={$i18n.t('Delete User')}>

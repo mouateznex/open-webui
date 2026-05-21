@@ -352,6 +352,29 @@ _OW_TO_RC_STATUS = {
 }
 
 
+async def set_user_active(user: UserModel, active: bool) -> None:
+    """
+    Called by the admin endpoint to suspend or restore a Rocket.Chat account.
+    active=False prevents login; active=True restores normal access.
+    """
+    if not is_configured():
+        return
+
+    try:
+        rc = get_client()
+        rc_id = await _get_rc_user_id(user)
+        if rc_id is None:
+            log.debug('Rocket.Chat set_user_active: no RC account for %s, skipping', user.email)
+            return
+        await rc.set_user_active(rc_id, active)
+        log.info('Rocket.Chat account %s for %s', 'activated' if active else 'suspended', user.email)
+
+    except RocketChatError as e:
+        log.warning('Rocket.Chat set_user_active failed for %s: %s', user.email, e)
+    except Exception as e:
+        log.warning('Rocket.Chat set_user_active unexpected error for %s: %s', user.email, e)
+
+
 async def sync_user_status(user: UserModel, status_message: Optional[str] = None) -> None:
     """
     Called when a user updates their status in Open WebUI.
