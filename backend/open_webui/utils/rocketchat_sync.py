@@ -13,9 +13,11 @@ Rocket.Chat API are avoided.
 import logging
 import re
 import secrets
+import time
 from typing import Optional
 
 from open_webui.models.users import UserModel, Users
+from open_webui.models.channels import ChannelModel
 from open_webui.utils.rocketchat import RocketChatError, get_client, is_configured
 
 log = logging.getLogger(__name__)
@@ -181,3 +183,149 @@ async def delete_user(user: UserModel) -> None:
         log.warning('Rocket.Chat delete_user failed for %s: %s', user.email, e)
     except Exception as e:
         log.warning('Rocket.Chat delete_user unexpected error for %s: %s', user.email, e)
+
+
+# ---------------------------------------------------------------------------
+# Channel sync helpers
+# ---------------------------------------------------------------------------
+
+# DM channels are intentionally excluded — they map 1-to-1 with users and
+# are provisioned on demand by the real-time bridge (Phase 4).
+_SKIP_TYPES = {'dm'}
+
+
+def _rc_channel_name(name: str) -> str:
+    """Sanitise an Open WebUI channel name to a valid Rocket.Chat room name."""
+    return re.sub(r'[^a-z0-9._-]', '-', name.lower()).strip('-') or 'channel'
+
+
+def _is_private(channel: ChannelModel) -> bool:
+    return channel.type == 'group' or bool(channel.is_private)
+
+
+def _get_rc_room_id(channel: ChannelModel) -> Optional[str]:
+    return (channel.data or {}).get('rocketchat_room_id')
+
+
+async def _save_rc_room_id(channel_id: str, existing_data: Optional[dict], room_id: str) -> None:
+    """Persist the Rocket.Chat room ID into channel.data without overwriting other keys."""
+    from open_webui.internal.db import get_async_db_context
+    from open_webui.models.channels import Channel
+    from sqlalchemy import update as sa_update
+
+    merged = {**(existing_data or {}), 'rocketchat_room_id': room_id}
+    async with get_async_db_context() as db:
+        await db.execute(
+            sa_update(Channel).where(Channel.id == channel_id).values(data=merged)
+        )
+        await db.commit()
+
+
+async def sync_channel_create(channel: ChannelModel) -> None:
+    """
+    Called after a new Open WebUI channel is created.
+    Creates the matching room in Rocket.Chat and stores the room ID in
+    channel.data so future update/delete calls can find it.
+    DM channels are skipped.
+    """
+    if not is_configured() or channel.type in _SKIP_TYPES:
+        return
+
+    try:
+        rc = get_client()
+        rc_name = _rc_channel_name(channel.name)
+
+        if _is_private(channel):
+            room = await rc.create_group(rc_name)
+        else:
+            room = await rc.create_channel(rc_name)
+
+        room_id = room.get('_id')
+        if not room_id:
+            log.warning('Rocket.Chat sync_channel_create: no room ID returned for %s', channel.name)
+            return
+
+        # Persist the room ID so update/delete calls can reference it
+        await _save_rc_room_id(channel.id, channel.data, room_id)
+
+        # Sync description if provided
+        if channel.description:
+            if _is_private(channel):
+                await rc.set_group_description(room_id, channel.description)
+            else:
+                await rc.set_channel_description(room_id, channel.description)
+
+        log.info('Rocket.Chat room created for channel "%s" (roomId=%s)', channel.name, room_id)
+
+    except RocketChatError as e:
+        log.warning('Rocket.Chat sync_channel_create failed for "%s": %s', channel.name, e)
+    except Exception as e:
+        log.warning('Rocket.Chat sync_channel_create unexpected error for "%s": %s', channel.name, e)
+
+
+async def sync_channel_update(channel: ChannelModel, old_name: Optional[str] = None) -> None:
+    """
+    Called after an Open WebUI channel is updated.
+    Syncs name and description changes to the Rocket.Chat room.
+    """
+    if not is_configured() or channel.type in _SKIP_TYPES:
+        return
+
+    room_id = _get_rc_room_id(channel)
+    if not room_id:
+        # Room was never synced — create it now
+        await sync_channel_create(channel)
+        return
+
+    try:
+        rc = get_client()
+        private = _is_private(channel)
+        rc_name = _rc_channel_name(channel.name)
+
+        # Only call rename if the name actually changed
+        if old_name and _rc_channel_name(old_name) != rc_name:
+            if private:
+                await rc.rename_group(room_id, rc_name)
+            else:
+                await rc.rename_channel(room_id, rc_name)
+
+        if channel.description is not None:
+            if private:
+                await rc.set_group_description(room_id, channel.description or '')
+            else:
+                await rc.set_channel_description(room_id, channel.description or '')
+
+        log.info('Rocket.Chat room updated for channel "%s"', channel.name)
+
+    except RocketChatError as e:
+        log.warning('Rocket.Chat sync_channel_update failed for "%s": %s', channel.name, e)
+    except Exception as e:
+        log.warning('Rocket.Chat sync_channel_update unexpected error for "%s": %s', channel.name, e)
+
+
+async def sync_channel_delete(channel: ChannelModel) -> None:
+    """
+    Called after an Open WebUI channel is deleted.
+    Deletes the corresponding Rocket.Chat room.
+    """
+    if not is_configured() or channel.type in _SKIP_TYPES:
+        return
+
+    room_id = _get_rc_room_id(channel)
+    if not room_id:
+        log.debug('Rocket.Chat sync_channel_delete: no room ID for "%s", skipping', channel.name)
+        return
+
+    try:
+        rc = get_client()
+        if _is_private(channel):
+            await rc.delete_group(room_id)
+        else:
+            await rc.delete_channel(room_id)
+
+        log.info('Rocket.Chat room deleted for channel "%s" (roomId=%s)', channel.name, room_id)
+
+    except RocketChatError as e:
+        log.warning('Rocket.Chat sync_channel_delete failed for "%s": %s', channel.name, e)
+    except Exception as e:
+        log.warning('Rocket.Chat sync_channel_delete unexpected error for "%s": %s', channel.name, e)

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import base64
@@ -62,6 +63,7 @@ from open_webui.utils.chat import generate_chat_completion
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_permission, filter_allowed_access_grants
+from open_webui.utils import rocketchat_sync as rc_sync
 from open_webui.utils.webhook import post_webhook
 from open_webui.utils.channels import extract_mentions, replace_mentions
 from open_webui.internal.db import get_async_session
@@ -342,6 +344,7 @@ async def create_new_channel(
             )
             await enter_room_for_users(f'channel:{channel.id}', participant_ids)
 
+            asyncio.create_task(rc_sync.sync_channel_create(channel))
             return ChannelModel(**channel.model_dump())
         else:
             raise Exception('Error creating channel')
@@ -643,6 +646,8 @@ async def update_channel_by_id(
     if channel.user_id != user.id and user.role != 'admin':
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
 
+    old_name = channel.name
+
     form_data.access_grants = await filter_allowed_access_grants(
         request.app.state.config.USER_PERMISSIONS,
         user.id,
@@ -653,6 +658,7 @@ async def update_channel_by_id(
 
     try:
         channel = await Channels.update_channel_by_id(id, form_data, db=db)
+        asyncio.create_task(rc_sync.sync_channel_update(channel, old_name=old_name))
         return ChannelModel(**channel.model_dump())
     except Exception as e:
         log.exception(e)
@@ -681,7 +687,10 @@ async def delete_channel_by_id(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
 
     try:
+        channel_snapshot = await Channels.get_channel_by_id(id, db=db)
         await Channels.delete_channel_by_id(id, db=db)
+        if channel_snapshot:
+            asyncio.create_task(rc_sync.sync_channel_delete(channel_snapshot))
         return True
     except Exception as e:
         log.exception(e)

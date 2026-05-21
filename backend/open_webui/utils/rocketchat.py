@@ -172,7 +172,7 @@ class RocketChatClient:
         })
 
     # ------------------------------------------------------------------
-    # Channel management (used by Phase 3)
+    # Channel management — public channels
     # ------------------------------------------------------------------
 
     async def create_channel(self, name: str, members: Optional[list] = None, read_only: bool = False) -> dict:
@@ -187,6 +187,14 @@ class RocketChatClient:
         await self._post('channels.delete', {'roomId': room_id})
         return True
 
+    async def rename_channel(self, room_id: str, name: str) -> dict:
+        body = await self._post('channels.rename', {'roomId': room_id, 'name': name})
+        return body.get('channel', {})
+
+    async def set_channel_description(self, room_id: str, description: str) -> dict:
+        body = await self._post('channels.setDescription', {'roomId': room_id, 'description': description})
+        return body.get('channel', {})
+
     async def get_channel_info(self, room_id: str) -> Optional[dict]:
         try:
             body = await self._get('channels.info', {'roomId': room_id})
@@ -195,6 +203,30 @@ class RocketChatClient:
             if e.status == 400:
                 return None
             raise
+
+    # ------------------------------------------------------------------
+    # Channel management — private groups
+    # ------------------------------------------------------------------
+
+    async def create_group(self, name: str, members: Optional[list] = None, read_only: bool = False) -> dict:
+        body = await self._post('groups.create', {
+            'name': name,
+            'members': members or [],
+            'readOnly': read_only,
+        })
+        return body.get('group', {})
+
+    async def delete_group(self, room_id: str) -> bool:
+        await self._post('groups.delete', {'roomId': room_id})
+        return True
+
+    async def rename_group(self, room_id: str, name: str) -> dict:
+        body = await self._post('groups.rename', {'roomId': room_id, 'name': name})
+        return body.get('group', {})
+
+    async def set_group_description(self, room_id: str, description: str) -> dict:
+        body = await self._post('groups.setDescription', {'roomId': room_id, 'description': description})
+        return body.get('group', {})
 
     # ------------------------------------------------------------------
     # Misc
