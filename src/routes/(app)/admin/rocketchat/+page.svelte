@@ -5,7 +5,7 @@
 
 	const i18n = getContext('i18n');
 
-	type Tab = 'queue' | 'webhooks' | 'apps';
+	type Tab = 'queue' | 'webhooks' | 'apps' | 'audit';
 	let activeTab: Tab = 'queue';
 
 	// ─────────────────────── queue ───────────────────────
@@ -161,11 +161,48 @@
 		}
 	}
 
+	// ─────────────────────── audit ───────────────────────
+	let auditEntries: any[] = [];
+	let auditMessageEntries: any[] = [];
+	let auditLoading = false;
+	let auditRoomFilter = '';
+
+	async function loadAudit() {
+		auditLoading = true;
+		try {
+			const [a, b] = await Promise.all([
+				fetch(`${WEBUI_API_BASE_URL}/rocketchat/audit/`, {
+					headers: { Authorization: `Bearer ${localStorage.token}` }
+				}),
+				fetch(
+					`${WEBUI_API_BASE_URL}/rocketchat/audit/messages${
+						auditRoomFilter ? `?room_id=${encodeURIComponent(auditRoomFilter)}` : ''
+					}`,
+					{ headers: { Authorization: `Bearer ${localStorage.token}` } }
+				)
+			]);
+			auditEntries = a.ok ? await a.json() : [];
+			auditMessageEntries = b.ok ? await b.json() : [];
+		} catch (err) {
+			toast.error(`${err}`);
+		} finally {
+			auditLoading = false;
+		}
+	}
+
+	function fmtAuditTs(ts: any): string {
+		if (!ts) return '';
+		if (typeof ts === 'object' && ts.$date) return new Date(Number(ts.$date)).toLocaleString();
+		const v = typeof ts === 'string' ? Date.parse(ts) : Number(ts);
+		return Number.isFinite(v) ? new Date(v).toLocaleString() : '';
+	}
+
 	function switchTab(t: Tab) {
 		activeTab = t;
 		if (t === 'queue') loadQueue();
 		if (t === 'webhooks') loadIntegrations();
 		if (t === 'apps') loadApps();
+		if (t === 'audit') loadAudit();
 	}
 
 	onMount(() => loadQueue());
@@ -205,6 +242,14 @@
 			on:click={() => switchTab('apps')}
 		>
 			{$i18n.t('Apps & Marketplace')}
+		</button>
+		<button
+			class="px-3 py-2 text-sm border-b-2 -mb-px {activeTab === 'audit'
+				? 'border-blue-500 text-blue-600'
+				: 'border-transparent text-gray-500 hover:text-gray-700'}"
+			on:click={() => switchTab('audit')}
+		>
+			{$i18n.t('Audit Logs')}
 		</button>
 	</nav>
 
@@ -471,6 +516,88 @@
 							<li class="border rounded p-3 dark:border-gray-700">
 								<div class="font-medium">{a.name ?? a.appName ?? a.id}</div>
 								<div class="text-xs text-gray-500">{a.shortDescription ?? ''}</div>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		</section>
+	{:else if activeTab === 'audit'}
+		<section class="space-y-6">
+			<header class="flex flex-wrap items-center gap-3">
+				<h2 class="text-lg font-medium flex-1">{$i18n.t('Rocket.Chat audit logs')}</h2>
+				<input
+					class="px-3 py-1 rounded border text-sm dark:bg-gray-800 dark:border-gray-700"
+					placeholder="Filter messages by RC roomId"
+					bind:value={auditRoomFilter}
+				/>
+				<button
+					class="px-3 py-1 rounded border text-sm dark:border-gray-700"
+					on:click={loadAudit}
+					disabled={auditLoading}
+				>
+					{$i18n.t('Refresh')}
+				</button>
+			</header>
+
+			<div>
+				<h3 class="font-medium mb-2 text-sm">{$i18n.t('General audit')}</h3>
+				{#if auditLoading}
+					<p class="text-sm text-gray-500">{$i18n.t('Loading…')}</p>
+				{:else if auditEntries.length === 0}
+					<p class="text-sm text-gray-500">
+						{$i18n.t(
+							'No audit entries returned. Audit may be disabled in Rocket.Chat or restricted to enterprise editions.'
+						)}
+					</p>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm border dark:border-gray-700 rounded">
+							<thead class="bg-gray-50 dark:bg-gray-900">
+								<tr>
+									<th class="px-3 py-2 text-left">When</th>
+									<th class="px-3 py-2 text-left">Actor</th>
+									<th class="px-3 py-2 text-left">Action</th>
+									<th class="px-3 py-2 text-left">Detail</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each auditEntries as e}
+									<tr class="border-t dark:border-gray-800 align-top">
+										<td class="px-3 py-2 whitespace-nowrap">{fmtAuditTs(e.ts ?? e.when ?? e._updatedAt)}</td>
+										<td class="px-3 py-2">
+											{e?.u?.username ?? e.user ?? e.actor ?? '?'}
+										</td>
+										<td class="px-3 py-2 font-mono text-xs">{e.action ?? e.event ?? ''}</td>
+										<td class="px-3 py-2 text-xs">
+											<pre class="whitespace-pre-wrap break-all">{JSON.stringify(
+													e.details ?? e.payload ?? e,
+													null,
+													2
+												)}</pre>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
+
+			<div>
+				<h3 class="font-medium mb-2 text-sm">{$i18n.t('Message audit')}</h3>
+				{#if auditMessageEntries.length === 0}
+					<p class="text-sm text-gray-500">
+						{$i18n.t('No message audit entries.')}
+					</p>
+				{:else}
+					<ul class="space-y-2">
+						{#each auditMessageEntries as m}
+							<li class="border rounded p-3 dark:border-gray-700 text-xs">
+								<div class="text-gray-500">
+									{fmtAuditTs(m.ts)} · room <code>{m.rid}</code> · user <code>{m.u?.username ?? m.u?._id ?? ''}</code>
+								</div>
+								<div class="mt-1 whitespace-pre-wrap">{m.msg ?? '(no body)'}</div>
 							</li>
 						{/each}
 					</ul>

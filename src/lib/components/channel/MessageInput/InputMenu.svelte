@@ -18,6 +18,8 @@
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
+	export let uploadFilesDirectToRCHandler: Function = () => {};
+	export let rcEnabled: boolean = false;
 
 	export let onClose: Function = () => {};
 
@@ -69,6 +71,20 @@
 				<Camera />
 				<div class=" line-clamp-1">{$i18n.t('Capture')}</div>
 			</button>
+
+			{#if rcEnabled}
+				<button
+					class="select-none flex w-full gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl"
+					type="button"
+					on:click={() => {
+						uploadFilesDirectToRCHandler();
+						show = false;
+					}}
+				>
+					<Clip />
+					<div class=" line-clamp-1">{$i18n.t('Upload to Rocket.Chat')}</div>
+				</button>
+			{/if}
 		</div>
 	</div>
 </Dropdown>

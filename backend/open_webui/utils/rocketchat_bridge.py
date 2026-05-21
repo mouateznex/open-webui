@@ -438,6 +438,7 @@ class RocketChatBridge:
             log.warning('Bridge _forward_files_to_rc imports failed: %s', e)
             return
 
+        uploaded = 0
         for f in files:
             file_id = (f or {}).get('id') if isinstance(f, dict) else None
             if not file_id:
@@ -445,25 +446,37 @@ class RocketChatBridge:
             try:
                 file_row = await FilesModel.get_file_by_id(file_id)
                 if not file_row or not getattr(file_row, 'path', None):
+                    log.info('Bridge file forward skipped (no path) for OW file %s', file_id)
                     continue
                 local_path = Storage.get_file(file_row.path)
                 with open(local_path, 'rb') as fh:
                     content = fh.read()
                 if not content:
+                    log.info('Bridge file forward skipped (empty) for OW file %s', file_id)
                     continue
                 ct = (
                     (file_row.meta or {}).get('content_type')
                     if file_row.meta else None
                 ) or 'application/octet-stream'
-                await rc.upload_to_room(
+                rc_msg = await rc.upload_to_room(
                     room_id=room_id,
                     filename=file_row.filename or 'file',
                     content=content,
                     content_type=ct,
                     description=f.get('description') if isinstance(f, dict) else None,
                 )
+                uploaded += 1
+                log.info(
+                    'Bridge file forward: OW file %s (%s, %d bytes) → RC room %s msg %s',
+                    file_id, ct, len(content), room_id, (rc_msg or {}).get('_id'),
+                )
             except Exception as exc:
                 log.warning('Bridge _forward_files_to_rc: file %s failed: %s', file_id, exc)
+        if files:
+            log.info(
+                'Bridge file forward complete for OW msg %s: %d/%d uploaded to RC room %s',
+                ow_message_id, uploaded, len(files), room_id,
+            )
 
 
 # ---------------------------------------------------------------------------

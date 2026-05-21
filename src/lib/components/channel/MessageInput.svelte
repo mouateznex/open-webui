@@ -24,6 +24,7 @@
 	import { getSessionUser } from '$lib/apis/auths';
 
 	import { uploadFile } from '$lib/apis/files';
+	import { uploadAudioToRC, uploadFileToRC } from '$lib/apis/rocketchat';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
@@ -78,6 +79,9 @@
 
 	let filesInputElement;
 	let inputFiles;
+
+	let rcDirectFilesInputElement;
+	let rcDirectInputFiles;
 
 	let showInputVariablesModal = false;
 	let inputVariablesModalCallback: (variableValues: Record<string, any>) => void;
@@ -353,6 +357,36 @@
 		}
 	};
 
+	// Direct-to-Rocket.Chat upload (skips OW's file pipeline). Used by the
+	// "Upload to Rocket.Chat" entry in InputMenu so the user has a clearly
+	// observable path that hits /api/v1/rocketchat/files/{id}/upload — useful
+	// when bypassing OW storage is desired (e.g. mirroring an attachment to RC
+	// without keeping a copy in OW).
+	const rcDirectUploadHandler = async (filesToUpload: File[]) => {
+		if (!channel?.id) return;
+		if (!$config?.features?.rocketchat_enabled || !channel?.data?.rocketchat_room_id) {
+			toast.error(
+				$i18n.t('This channel is not bridged to a Rocket.Chat room.')
+			);
+			return;
+		}
+		for (const file of filesToUpload) {
+			try {
+				const result = await uploadFileToRC(channel.id, file, {
+					description: file.name
+				});
+				toast.success(
+					$i18n.t('Uploaded "{{name}}" to Rocket.Chat (msg {{id}})', {
+						name: file.name,
+						id: (result?.rc_message_id ?? '').slice(0, 8)
+					})
+				);
+			} catch (err) {
+				toast.error(`${err}`);
+			}
+		}
+	};
+
 	const inputFilesHandler = async (inputFiles) => {
 		inputFiles.forEach(async (file) => {
 			console.info('Processing file:', {
@@ -494,6 +528,13 @@
 					uploadedFile?.meta?.collection_name || uploadedFile?.collection_name;
 				fileItem.content_type = uploadedFile.meta?.content_type || uploadedFile.content_type;
 				fileItem.url = `${uploadedFile.id}`;
+				// When this channel is bridged to a Rocket.Chat room, the
+				// backend will mirror the attachment to RC's rooms.upload
+				// when the message is posted. Surface that fact to the user
+				// so the RC sync isn't invisible.
+				fileItem.rc_mirror_pending =
+					$config?.features?.rocketchat_enabled &&
+					Boolean(channel?.data?.rocketchat_room_id);
 
 				files = files;
 			} else {
@@ -703,6 +744,20 @@
 				filesInputElement.value = '';
 			}}
 		/>
+
+		<input
+			bind:this={rcDirectFilesInputElement}
+			bind:files={rcDirectInputFiles}
+			type="file"
+			hidden
+			multiple
+			on:change={async () => {
+				if (rcDirectInputFiles && rcDirectInputFiles.length > 0) {
+					await rcDirectUploadHandler(Array.from(rcDirectInputFiles));
+				}
+				rcDirectFilesInputElement.value = '';
+			}}
+		/>
 	{/if}
 
 	<InputVariablesModal
@@ -780,7 +835,26 @@
 						onConfirm={async ({ file }) => {
 							audioMessageRecording = false;
 							await tick();
+							// Standard OW path: upload + attach to outgoing message.
+							// (post_new_message will mirror it to RC server-side.)
 							uploadFileHandler(file);
+
+							// In addition, if the channel is bridged to a Rocket.Chat
+							// room, push the recording directly to rooms.upload via
+							// /rocketchat/files/{id}/upload/audio. RC then renders it
+							// as a native voice-memo bubble immediately, without
+							// waiting for the OW message-post round-trip.
+							if (
+								$config?.features?.rocketchat_enabled &&
+								channel?.data?.rocketchat_room_id
+							) {
+								uploadAudioToRC(channel.id, file, {
+									description: 'Audio message'
+								}).catch((err) =>
+									console.warn('RC audio direct upload failed:', err)
+								);
+							}
+
 							if (chatInputElement) chatInputElement.focus();
 						}}
 					/>
@@ -1006,6 +1080,11 @@
 												uploadFilesHandler={() => {
 													filesInputElement.click();
 												}}
+												uploadFilesDirectToRCHandler={() => {
+													rcDirectFilesInputElement?.click();
+												}}
+												rcEnabled={$config?.features?.rocketchat_enabled &&
+													Boolean(channel?.data?.rocketchat_room_id)}
 											>
 												<button
 													id="input-menu-button"
