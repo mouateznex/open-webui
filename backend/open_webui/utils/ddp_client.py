@@ -39,8 +39,15 @@ class DDPClient:
         # Pending method calls: call_id → Future
         self._pending: dict[str, asyncio.Future] = {}
 
-        # Active subscriptions: sub_id → async callback(data)
-        self._subscriptions: dict[str, Callable] = {}
+        # Active subscriptions: sub_id → {
+        #   'callback': async callback(data),
+        #   'stream':   DDP stream/collection name (e.g. 'stream-room-messages'),
+        #   'event':    eventName this sub cares about (room id or 'user-status'),
+        # }
+        # The event is used to route inbound 'changed' messages to the correct
+        # callback so a message in room A is not also delivered to room B's
+        # handler (duplicates) or to the presence handler (type errors).
+        self._subscriptions: dict[str, dict] = {}
 
         self._listener_task: Optional[asyncio.Task] = None
         self.connected = False
@@ -78,9 +85,21 @@ class DDPClient:
         return result
 
     async def subscribe(self, name: str, params: list, callback: Callable) -> str:
-        """Subscribe to a Rocket.Chat stream. Returns the subscription ID."""
+        """
+        Subscribe to a Rocket.Chat stream. Returns the subscription ID.
+
+        By Rocket.Chat convention params[0] is the stream's event name — the
+        room id for 'stream-room-messages', or the notification type (e.g.
+        'user-status') for 'stream-notify-logged'. It is recorded so inbound
+        'changed' messages can be routed to the right callback.
+        """
         sub_id = str(uuid.uuid4())
-        self._subscriptions[sub_id] = callback
+        event = params[0] if params and isinstance(params[0], str) else None
+        self._subscriptions[sub_id] = {
+            'callback': callback,
+            'stream': name,
+            'event': event,
+        }
         await self._send({'msg': 'sub', 'id': sub_id, 'name': name, 'params': params})
         return sub_id
 
@@ -152,9 +171,17 @@ class DDPClient:
                     fut.set_result(data.get('result', {}))
 
         elif msg_type == 'changed':
-            # Fan out to every registered callback
-            for sub_id, cb in list(self._subscriptions.items()):
+            # Route to the subscription(s) matching this stream + eventName only.
+            collection = data.get('collection')
+            event_name = (data.get('fields') or {}).get('eventName')
+            for sub_id, sub in list(self._subscriptions.items()):
+                if sub['stream'] != collection:
+                    continue
+                # If the subscription tracks a specific event (room id /
+                # notification type), only deliver matching events.
+                if sub['event'] is not None and event_name is not None and sub['event'] != event_name:
+                    continue
                 try:
-                    await cb(data)
+                    await sub['callback'](data)
                 except Exception as e:
                     log.warning('DDP subscription callback %s error: %s', sub_id, e)
