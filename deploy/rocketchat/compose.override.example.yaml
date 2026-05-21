@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Rocket.Chat package — EXAMPLE local override
+# ---------------------------------------------------------------------------
+# Copy this to `compose.override.yaml` (which Docker Compose loads automatically)
+# or pass it explicitly with another `-f` flag, then edit it for your host.
+#
+# Everything here is OPTIONAL and exists only to show common customizations.
+# Delete the blocks you don't need.
+# ---------------------------------------------------------------------------
+
+services:
+  # Example: put Rocket.Chat behind a reverse proxy (Traefik) instead of
+  # publishing a host port directly. Remove the `ports:` mapping from
+  # compose.yaml (via an override) if you do this.
+  rocketchat:
+    # ports: []   # uncomment to stop publishing 3100 on the host
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.rocketchat.rule=Host(`chat.example.com`)'
+      - 'traefik.http.routers.rocketchat.entrypoints=websecure'
+      - 'traefik.http.routers.rocketchat.tls.certresolver=letsencrypt'
+      - 'traefik.http.services.rocketchat.loadbalancer.server.port=3000'
+
+  # Example: pin MongoDB to a specific patch and cap its memory.
+  mongodb:
+    # image: mongo:7.0.14
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  # Example: give Open WebUI more workers / a custom log level when RC is on.
+  open-webui:
+    environment:
+      - 'GLOBAL_LOG_LEVEL=INFO'

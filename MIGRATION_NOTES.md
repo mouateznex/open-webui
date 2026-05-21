@@ -1,7 +1,17 @@
 # Rocket.Chat Integration — Migration Notes
 
-This document is the reference for transplanting the Rocket.Chat integration
-from this mock project into another Open WebUI deployment (e.g. NexBI).
+This document is a high-level reference for the Rocket.Chat integration's env
+vars, files, and routes.
+
+> **For deployment, use the portable package at `deploy/rocketchat/`.**
+> It is the copy/paste unit: optional Compose layer (no longer baked into the
+> root `docker-compose.yaml`), complete `.env.example`, validation + smoke-test
+> scripts, a file-by-file `patch-notes.md`, and a step-by-step
+> `MIGRATION_CHECKLIST.md`. Start there:
+>
+> - `deploy/rocketchat/README.md` — quick start + URL topology + 3 examples
+> - `deploy/rocketchat/MIGRATION_CHECKLIST.md` — the transplant checklist
+> - `deploy/rocketchat/open-webui/patch-notes.md` — exact app-code edits
 
 ---
 
@@ -301,9 +311,19 @@ Grep for `rc_sync_queue.enqueue` in the source files for the exact call sites.
 
 ### 8 — Add Docker services
 
-Add the `mongodb` and `rocketchat` service blocks from `docker-compose.yaml` to the target compose file.
+Copy the `deploy/rocketchat/` package and layer its optional Compose files —
+do **not** bake `mongodb`/`rocketchat` into the target's root compose:
 
-Set environment variables for the target deployment (see "Required Environment Variables" above).
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f deploy/rocketchat/compose.yaml \
+  -f deploy/rocketchat/compose.open-webui.override.yaml \
+  --profile rocketchat up -d
+```
+
+Set environment variables from `deploy/rocketchat/.env.example` and validate
+with `deploy/rocketchat/scripts/validate-env.sh`.
 
 Key decision: set `WEBUI_OAUTH_URL` to a URL that resolves identically from both browsers **and** from inside the Rocket.Chat container.
 
@@ -325,12 +345,17 @@ pip show httpx websockets pyjwt
 
 ### 10 — First-run verification
 
-1. Start the stack: `docker compose up -d`
-2. Wait for all services to be healthy: `docker compose ps`
-3. Open Open WebUI in a browser; create or log in as a user.
-4. Open Rocket.Chat at `ROCKETCHAT_BASE_URL`; sign in with "Sign in with Open WebUI".
-5. Confirm the user appears in both systems.
-6. Send a message in an OW channel; confirm it appears in the matching RC room.
+Run the smoke test, then verify manually:
+
+```bash
+./deploy/rocketchat/scripts/smoke-test.sh
+```
+
+1. Wait for all services to be healthy: `docker compose ps`
+2. Open Open WebUI in a browser; create or log in as a user.
+3. Open Rocket.Chat at `ROCKETCHAT_BASE_URL`; sign in with "Sign in with Open WebUI".
+4. Confirm the user appears in both systems.
+5. Send a message in an OW channel; confirm it appears in the matching RC room.
 
 ---
 
@@ -353,26 +378,25 @@ No existing functionality was removed or broken.
 
 ## Running the Mock After Refactor
 
-The existing `docker-compose.yaml` workflow is unchanged:
+Rocket.Chat is now an **optional** layer; the base stack runs without it.
 
 ```bash
-# 1. Create a .env file with required secrets
-cp .env.example .env   # if one exists, otherwise create manually
-# Set at minimum:
-#   WEBUI_SECRET_KEY=<random 32-byte hex>
-#   OAUTH_SERVER_CLIENT_SECRET=<random>
-#   ROCKETCHAT_ADMIN_PASSWORD=<password>
-#   WEBUI_OAUTH_URL=http://host.docker.internal:3000
+# Base stack only (no Rocket.Chat) — needs just WEBUI_SECRET_KEY
+docker compose -f docker-compose.yaml up -d
 
-# 2. Start everything
-docker compose up -d
+# Full stack WITH Rocket.Chat
+cp deploy/rocketchat/.env.example .env   # then fill in secrets + domains
+./deploy/rocketchat/scripts/validate-env.sh
+docker compose \
+  -f docker-compose.yaml \
+  -f deploy/rocketchat/compose.yaml \
+  -f deploy/rocketchat/compose.open-webui.override.yaml \
+  --profile rocketchat up -d
 
-# 3. Tail logs
+# Tail logs
 docker compose logs -f open-webui rocketchat
 ```
 
-To disable RC while keeping the stack running:
-
-```bash
-ROCKETCHAT_ENABLED=false docker compose up -d open-webui
-```
+To run without Rocket.Chat, simply omit the package's compose files and the
+`--profile rocketchat` flag — no `ROCKETCHAT_ENABLED=false` needed, and no
+Rocket.Chat secrets are required.

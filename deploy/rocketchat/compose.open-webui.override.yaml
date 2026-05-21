@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Rocket.Chat integration — Open WebUI service override
+# ---------------------------------------------------------------------------
+# This override is layered ONTO the host project's `open-webui` service. It adds
+# only the Rocket.Chat-specific environment variables and the dependency on the
+# Rocket.Chat container — nothing else. The base open-webui service stays usable
+# without it.
+#
+# Layer it explicitly:
+#
+#   docker compose \
+#     -f docker-compose.yaml \
+#     -f deploy/rocketchat/compose.yaml \
+#     -f deploy/rocketchat/compose.open-webui.override.yaml \
+#     --profile rocketchat up -d
+#
+# Because depends_on lives only here (not in the base compose), Open WebUI never
+# requires Rocket.Chat unless you opt in by including this file.
+# ---------------------------------------------------------------------------
+
+services:
+  open-webui:
+    depends_on:
+      rocketchat:
+        condition: service_healthy
+    environment:
+      # --- OAuth 2.0 / OIDC server (Open WebUI is the IdP for Rocket.Chat) -----
+      - 'OAUTH_SERVER_CLIENT_ID=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
+      - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET:?OAUTH_SERVER_CLIENT_SECRET must be set}'
+      # Must match the callback URL configured in Rocket.Chat's Custom OAuth settings
+      - 'OAUTH_SERVER_REDIRECT_URIS=${OAUTH_SERVER_REDIRECT_URIS:?OAUTH_SERVER_REDIRECT_URIS must be set}'
+
+      # --- Rocket.Chat API client ----------------------------------------------
+      # Feature flag — "false" force-disables, "true" force-enables,
+      # unset = auto-detect from credentials (default).
+      - 'ROCKETCHAT_ENABLED=${ROCKETCHAT_ENABLED-true}'
+      # Container-to-container (internal) URL for backend REST + DDP calls.
+      - 'ROCKETCHAT_INTERNAL_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
+      # Browser-facing (public) URL — used for deep-links shown to users.
+      - 'ROCKETCHAT_BASE_URL=${ROCKETCHAT_BASE_URL:?ROCKETCHAT_BASE_URL must be set}'
+      # Legacy alias — kept for backwards compatibility with older configs.
+      - 'ROCKETCHAT_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
+      - 'ROCKETCHAT_ADMIN_USER=${ROCKETCHAT_ADMIN_USER-rc_admin}'
+      - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD:?ROCKETCHAT_ADMIN_PASSWORD must be set}'
+
+      # --- Optional features ----------------------------------------------------
+      # Rocket.Chat outgoing webhook token for /rocketchat/slash (AI slash commands)
+      - 'ROCKETCHAT_SLASH_TOKEN=${ROCKETCHAT_SLASH_TOKEN-}'
+      - 'ROCKETCHAT_SLASH_MODEL=${ROCKETCHAT_SLASH_MODEL-}'
+      # Jitsi video call server (empty = feature disabled)
+      - 'JITSI_URL=${JITSI_URL-}'
+      # Matrix federation — domain RC uses as its Matrix homeserver (empty = disabled)
+      - 'MATRIX_HOMESERVER_DOMAIN=${MATRIX_HOMESERVER_DOMAIN-}'

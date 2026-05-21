@@ -1,0 +1,109 @@
+{
+  "name": "open-webui-rocketchat-integration",
+  "version": "1.0.0",
+  "description": "Portable Rocket.Chat integration package for Open WebUI: OAuth2/OIDC IdP, real-time DDP bridge, REST sync, and Docker deployment.",
+  "requires": {
+    "open-webui": "compatible fork (this repository's RC integration applied)",
+    "mongo": "7.0",
+    "rocketchat": "pinned via ROCKETCHAT_TAG (default 7.4.1)"
+  },
+  "composeFiles": [
+    "deploy/rocketchat/compose.yaml",
+    "deploy/rocketchat/compose.open-webui.override.yaml",
+    "deploy/rocketchat/compose.override.example.yaml"
+  ],
+  "composeProfiles": ["rocketchat"],
+  "envExample": "deploy/rocketchat/.env.example",
+  "scripts": {
+    "validate-env": [
+      "deploy/rocketchat/scripts/validate-env.sh",
+      "deploy/rocketchat/scripts/validate-env.ps1"
+    ],
+    "smoke-test": "deploy/rocketchat/scripts/smoke-test.sh"
+  },
+  "backendFiles": {
+    "copy": [
+      "backend/open_webui/utils/rocketchat.py",
+      "backend/open_webui/utils/rocketchat_sync.py",
+      "backend/open_webui/utils/rocketchat_bridge.py",
+      "backend/open_webui/utils/rc_sync_queue.py",
+      "backend/open_webui/utils/ddp_client.py",
+      "backend/open_webui/routers/rocketchat_extras.py",
+      "backend/open_webui/routers/rocketchat_integrations.py",
+      "backend/open_webui/routers/oauth_server.py"
+    ],
+    "merge": [
+      "backend/open_webui/env.py",
+      "backend/open_webui/main.py",
+      "backend/open_webui/routers/auths.py",
+      "backend/open_webui/routers/users.py",
+      "backend/open_webui/routers/channels.py"
+    ]
+  },
+  "frontendFiles": {
+    "copy": [
+      "src/lib/apis/rocketchat.ts",
+      "src/lib/utils/push.ts",
+      "src/routes/(app)/admin/rocketchat/+page.svelte"
+    ],
+    "merge": [
+      "src/routes/+layout.svelte",
+      "src/routes/(app)/admin/+layout.svelte",
+      "src/routes/(app)/search/+page.svelte",
+      "src/lib/apis/users/index.ts",
+      "src/lib/components/channel/MessageInput.svelte",
+      "src/lib/components/channel/Messages/Message.svelte",
+      "src/lib/components/channel/Navbar.svelte",
+      "src/lib/components/channel/HighlightsModal.svelte",
+      "src/lib/components/channel/URLPreview.svelte",
+      "src/lib/components/admin/Users/UserList.svelte",
+      "src/lib/components/chat/Settings/General.svelte"
+    ]
+  },
+  "pythonDependencies": ["httpx", "websockets", "pyjwt"],
+  "envVars": {
+    "required": [
+      "WEBUI_URL",
+      "WEBUI_OAUTH_URL",
+      "WEBUI_SECRET_KEY",
+      "ROCKETCHAT_PUBLIC_URL",
+      "ROCKETCHAT_INTERNAL_URL",
+      "ROCKETCHAT_BASE_URL",
+      "OAUTH_SERVER_CLIENT_ID",
+      "OAUTH_SERVER_CLIENT_SECRET",
+      "OAUTH_SERVER_REDIRECT_URIS",
+      "ROCKETCHAT_ADMIN_USER",
+      "ROCKETCHAT_ADMIN_PASSWORD",
+      "ROCKETCHAT_ADMIN_EMAIL",
+      "ROCKETCHAT_TAG"
+    ],
+    "optional": [
+      "ROCKETCHAT_ENABLED",
+      "ROCKETCHAT_URL",
+      "ROCKETCHAT_SLASH_TOKEN",
+      "ROCKETCHAT_SLASH_MODEL",
+      "JITSI_URL",
+      "MATRIX_HOMESERVER_DOMAIN",
+      "RC_SYNC_QUEUE_DIR",
+      "VAPID_PUBLIC_KEY",
+      "MONGO_TAG",
+      "OPEN_WEBUI_PORT",
+      "ROCKETCHAT_PORT"
+    ]
+  },
+  "backendRoutes": [
+    "GET  /.well-known/openid-configuration",
+    "GET  /oauth/authorize",
+    "POST /oauth/token",
+    "GET  /oauth/userinfo",
+    "POST /rocketchat/slash",
+    "ALL  /api/v1/rocketchat/*",
+    "GET  /api/v1/search",
+    "ALL  /api/v1/teams/*"
+  ],
+  "frontendConfigKeys": [
+    "features.rocketchat_enabled",
+    "features.rocketchat_base_url",
+    "features.rocketchat_slash_enabled"
+  ]
+}

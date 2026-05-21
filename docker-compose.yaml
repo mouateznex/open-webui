@@ -2,7 +2,6 @@ services:
   ollama:
     volumes:
       - ollama:/root/.ollama
-    container_name: ollama
     pull_policy: always
     tty: true
     restart: unless-stopped
@@ -13,14 +12,11 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
-    container_name: open-webui
     volumes:
       - open-webui:/app/backend/data
     depends_on:
       ollama:
         condition: service_started
-      rocketchat:
-        condition: service_healthy
     ports:
       - ${OPEN_WEBUI_PORT-3000}:8080
     environment:
@@ -28,137 +24,25 @@ services:
       - 'WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set in environment or .env}'
       # Public URL Open WebUI is reachable at (used in OIDC discovery document)
       - 'WEBUI_URL=${WEBUI_URL-http://localhost:3000}'
-      # OAuth Server — credentials Rocket.Chat uses to authenticate against Open WebUI
-      - 'OAUTH_SERVER_CLIENT_ID=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
-      - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET:?OAUTH_SERVER_CLIENT_SECRET must be set in environment or .env}'
-      # Must match the callback URL configured in Rocket.Chat's Custom OAuth settings
-      - 'OAUTH_SERVER_REDIRECT_URIS=${OAUTH_SERVER_REDIRECT_URIS-http://localhost:3100/_oauth/openwebui}'
-      # Rocket.Chat feature flag — set to "false" to disable the integration even
-      # when credentials are present; leave unset for auto-detection (default).
-      - 'ROCKETCHAT_ENABLED=${ROCKETCHAT_ENABLED-}'
-      # Container-to-container (internal) URL the Open WebUI backend uses for
-      # REST + DDP API calls.  Never exposed to browsers.
-      - 'ROCKETCHAT_INTERNAL_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
-      # Browser-facing (public) URL — used to generate deep-links shown to users.
-      # Defaults to ROCKETCHAT_INTERNAL_URL when unset, which is fine for local dev.
-      - 'ROCKETCHAT_BASE_URL=${ROCKETCHAT_BASE_URL-http://localhost:3100}'
-      # Legacy alias — kept for backwards compatibility with older configs.
-      - 'ROCKETCHAT_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
-      - 'ROCKETCHAT_ADMIN_USER=${ROCKETCHAT_ADMIN_USER-rc_admin}'
-      - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD:?ROCKETCHAT_ADMIN_PASSWORD must be set in environment or .env}'
-      # Rocket.Chat outgoing webhook token for /rocketchat/slash (AI slash commands)
-      - 'ROCKETCHAT_SLASH_TOKEN=${ROCKETCHAT_SLASH_TOKEN-}'
-      - 'ROCKETCHAT_SLASH_MODEL=${ROCKETCHAT_SLASH_MODEL-}'
-      # Jitsi video call server (empty = feature disabled)
-      - 'JITSI_URL=${JITSI_URL-}'
-      # Matrix federation — domain RC uses as its Matrix homeserver (empty = disabled)
-      - 'MATRIX_HOMESERVER_DOMAIN=${MATRIX_HOMESERVER_DOMAIN-}'
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # MongoDB — required by Rocket.Chat
-  # ---------------------------------------------------------------------------
-  mongodb:
-    image: mongo:7.0
-    container_name: mongodb
-    restart: unless-stopped
-    volumes:
-      - mongodb:/data/db
-    command: mongod --oplogSize 128 --replSet rs0
-    healthcheck:
-      test: >
-        bash -c "mongosh --quiet --eval
-        'try { rs.status().ok } catch(e) { rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongodb:27017\"}]}).ok }'"
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-
-  # ---------------------------------------------------------------------------
-  # Rocket.Chat
-  # ---------------------------------------------------------------------------
-  rocketchat:
-    image: registry.rocket.chat/rocketchat/rocket.chat:${ROCKETCHAT_TAG-latest}
-    container_name: rocketchat
-    restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    ports:
-      - ${ROCKETCHAT_PORT-3100}:3000
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/info || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 12
-      start_period: 90s
-    environment:
-      - 'MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0'
-      - 'MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0'
-      # Public URL Rocket.Chat is reachable at (browser-facing)
-      - 'ROOT_URL=${ROCKETCHAT_PUBLIC_URL-http://localhost:3100}'
-      - 'PORT=3000'
-
-      # --- Admin / service account auto-provisioning ---------------------------
-      # Rocket.Chat creates this admin on first boot. It MUST match the
-      # ROCKETCHAT_ADMIN_USER / ROCKETCHAT_ADMIN_PASSWORD that Open WebUI uses to
-      # authenticate against the Rocket.Chat REST + DDP APIs, otherwise the
-      # integration cannot log in. ADMIN_EMAIL must not collide with a real user.
-      - 'ADMIN_USERNAME=${ROCKETCHAT_ADMIN_USER-rc_admin}'
-      - 'ADMIN_PASS=${ROCKETCHAT_ADMIN_PASSWORD:?ROCKETCHAT_ADMIN_PASSWORD must be set in environment or .env}'
-      - 'ADMIN_EMAIL=${ROCKETCHAT_ADMIN_EMAIL-rc-admin@example.com}'
-      # Skip the interactive setup wizard so the server is API-ready immediately.
-      - 'OVERWRITE_SETTING_Show_Setup_Wizard=completed'
-
-      # --- Disable Rocket.Chat's own registration/login (Open WebUI is the IdP) -
-      - 'OVERWRITE_SETTING_Accounts_RegistrationForm=Disabled'
-      - 'OVERWRITE_SETTING_Accounts_ShowFormLogin=false'
-
-      # --- Custom OAuth: "OpenWebUI" provider --------------------------------
-      # The provider name "OpenWebUI" yields the callback path /_oauth/openwebui,
-      # which must match OAUTH_SERVER_REDIRECT_URIS on the open-webui service.
-      #
-      # IMPORTANT: WEBUI_OAUTH_URL is used for BOTH the browser redirect
-      # (authorize) and the server-to-server calls (token/userinfo) Rocket.Chat
-      # makes. It must therefore resolve to Open WebUI *identically* from the
-      # user's browser AND from inside the rocketchat container. In production
-      # use the real public domain (it resolves everywhere). For local Docker
-      # Desktop, point WEBUI_OAUTH_URL at http://host.docker.internal:3000 and
-      # add "127.0.0.1 host.docker.internal" to your host's /etc/hosts so the
-      # browser resolves it too.
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI=true'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-url=${WEBUI_OAUTH_URL-${WEBUI_URL-http://host.docker.internal:3000}}'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-authorize_path=/oauth/authorize'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-token_path=/oauth/token'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-token_sent_via=payload'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-identity_path=/oauth/userinfo'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-identity_token_sent_via=header'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-scope=openid'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-id=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-secret=${OAUTH_SERVER_CLIENT_SECRET:?OAUTH_SERVER_CLIENT_SECRET must be set in environment or .env}'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-login_style=redirect'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-button_label_text=Sign in with Open WebUI'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-username_field=name'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-email_field=email'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-name_field=name'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-merge_users=true'
-      # Map the OIDC "roles" claim → Rocket.Chat roles (admin/user) automatically.
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-roles_claim=roles'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-merge_roles=true'
-
-      # --- Matrix federation (RC ≥ 5.0 built-in bridge) ----------------------
-      # Set MATRIX_HOMESERVER_DOMAIN to activate all three at once.
-      - 'OVERWRITE_SETTING_Feature_Federation_Enabled=${MATRIX_HOMESERVER_DOMAIN:+true}'
-      - 'OVERWRITE_SETTING_Feature_Federation_Matrix_Enabled=${MATRIX_HOMESERVER_DOMAIN:+true}'
-      - 'OVERWRITE_SETTING_Feature_Federation_Domain=${MATRIX_HOMESERVER_DOMAIN-}'
-    extra_hosts:
-      # Lets the rocketchat container reach Open WebUI on the host (Docker Desktop)
-      # for the server-to-server OAuth token/userinfo calls.
-      - host.docker.internal:host-gateway
+# ---------------------------------------------------------------------------
+# Rocket.Chat is an OPTIONAL add-on and lives in its own portable package at
+# deploy/rocketchat/.  The base stack above boots fine without it.
+#
+# To run Open WebUI WITH the Rocket.Chat integration:
+#
+#   docker compose \
+#     -f docker-compose.yaml \
+#     -f deploy/rocketchat/compose.yaml \
+#     -f deploy/rocketchat/compose.open-webui.override.yaml \
+#     --profile rocketchat up -d
+#
+# See deploy/rocketchat/README.md for full instructions.
+# ---------------------------------------------------------------------------
 
 volumes:
   ollama: {}
   open-webui: {}
-  mongodb: {}

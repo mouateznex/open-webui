@@ -1,0 +1,26 @@
+# Frontend files that make up the Rocket.Chat integration.
+#
+#   [COPY]  — new, RC-only files. Copy verbatim into the target tree.
+#   [MERGE] — existing Svelte components that gained a small RC-gated block,
+#             always guarded by {#if $config?.features?.rocketchat_enabled}.
+#             See patch-notes.md for the exact hook in each.
+#
+# Paths are relative to the repository root.
+
+# --- [COPY] new files — drop in as-is --------------------------------------
+[COPY] src/lib/apis/rocketchat.ts                          # API helpers: uploadFileToRC, uploadAudioToRC, admin/search/audit calls
+[COPY] src/lib/utils/push.ts                               # Web Push subscribe + RC push-token registration + notification routing
+[COPY] src/routes/(app)/admin/rocketchat/+page.svelte      # Admin -> Rocket.Chat settings/queue/audit page
+
+# --- [MERGE] existing files — add the RC-gated block (see patch-notes.md) ---
+[MERGE] src/routes/+layout.svelte                          # listen for 'rocketchat:notification' socket events
+[MERGE] src/routes/(app)/admin/+layout.svelte             # add "Rocket.Chat" link to the admin sidebar
+[MERGE] src/routes/(app)/search/+page.svelte              # render RC-augmented search results
+[MERGE] src/lib/apis/users/index.ts                       # add setRocketChatUserActive() API helper
+[MERGE] src/lib/components/channel/MessageInput.svelte     # upload file/audio to RC; gate on rocketchat_enabled
+[MERGE] src/lib/components/channel/Messages/Message.svelte # URL preview via RC
+[MERGE] src/lib/components/channel/Navbar.svelte           # "Open in Rocket.Chat" / video-call / highlights buttons
+[MERGE] src/lib/components/channel/HighlightsModal.svelte  # channel highlights modal (RC starred/pinned)
+[MERGE] src/lib/components/channel/URLPreview.svelte       # URL preview card component
+[MERGE] src/lib/components/admin/Users/UserList.svelte     # per-user "Open in RC" / activate control
+[MERGE] src/lib/components/chat/Settings/General.svelte    # browser-notification toggle wired to RC push

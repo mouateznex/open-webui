@@ -1,0 +1,25 @@
+# Backend files that make up the Rocket.Chat integration.
+#
+# Two categories:
+#   [COPY]  — new, RC-only files. Copy verbatim into the target tree.
+#   [MERGE] — existing Open WebUI files that need a small RC hook added.
+#             See patch-notes.md for the exact block/import/route to add.
+#
+# Paths are relative to the repository root.
+
+# --- [COPY] new files — drop in as-is --------------------------------------
+[COPY] backend/open_webui/utils/rocketchat.py            # RocketChatClient: REST API wrapper, init(), is_configured()
+[COPY] backend/open_webui/utils/rocketchat_sync.py       # sync handlers (user/channel/dm create/update/delete) + queue registration
+[COPY] backend/open_webui/utils/rocketchat_bridge.py     # DDP real-time bridge; OW->RC message/pin/edit/delete/react forwarding
+[COPY] backend/open_webui/utils/rc_sync_queue.py         # persistent job queue with exponential backoff + dead-letter
+[COPY] backend/open_webui/utils/ddp_client.py            # low-level DDP (Meteor WebSocket) protocol client
+[COPY] backend/open_webui/routers/rocketchat_extras.py   # /api/v1/rocketchat/* + /api/v1/search + /api/v1/teams
+[COPY] backend/open_webui/routers/rocketchat_integrations.py  # /rocketchat/slash outgoing-webhook (/ask AI command)
+[COPY] backend/open_webui/routers/oauth_server.py        # OAuth2/OIDC IdP: /.well-known, /oauth/authorize|token|userinfo
+
+# --- [MERGE] existing files — add the RC hook (see patch-notes.md) ----------
+[MERGE] backend/open_webui/env.py                        # add the "Rocket.Chat Integration" env block
+[MERGE] backend/open_webui/main.py                       # import env vars; register 3 routers; startup init + queue + bridge; /api/config flags
+[MERGE] backend/open_webui/routers/auths.py              # enqueue 'user.profile' on signup/login
+[MERGE] backend/open_webui/routers/users.py              # enqueue user.role/profile/status/delete + RC admin endpoints
+[MERGE] backend/open_webui/routers/channels.py           # enqueue channel.* + dm.create; bridge forward on send/pin/edit/delete/react; RC-augmented search
