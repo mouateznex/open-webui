@@ -5,6 +5,8 @@ import time
 from typing import Optional
 from urllib.parse import urlencode
 
+import asyncio
+
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -222,6 +224,11 @@ async def userinfo(request: Request):
 
     if user.role == 'pending':
         raise HTTPException(status_code=403, detail='Account pending approval')
+
+    # Fire-and-forget: provision/correct the Rocket.Chat account in the background
+    # so the HTTP response is not delayed by the RC API call.
+    from open_webui.utils.rocketchat_sync import ensure_user
+    asyncio.create_task(ensure_user(user))
 
     return JSONResponse({
         'sub': user.id,

@@ -55,6 +55,7 @@ from open_webui.config import (
     OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
 )
 from open_webui.utils.oauth import auth_manager_config
+from open_webui.utils import rocketchat_sync as rc_sync
 from pydantic import BaseModel
 
 from open_webui.utils.misc import parse_duration, validate_email_format
@@ -246,6 +247,7 @@ async def update_profile(
             db=db,
         )
         if user:
+            asyncio.create_task(rc_sync.sync_user_profile(user))
             return user
         else:
             raise HTTPException(400, detail=ERROR_MESSAGES.DEFAULT())

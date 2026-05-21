@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,7 @@ from open_webui.utils.auth import (
     get_verified_user,
     validate_password,
 )
+from open_webui.utils import rocketchat_sync as rc_sync
 from open_webui.utils.access_control import get_permissions, has_permission
 from open_webui.socket.main import disconnect_user_sessions
 
@@ -605,6 +607,12 @@ async def update_user_by_id(
             # privileges cached in SESSION_POOL are invalidated.
             if updated_user.role != user.role:
                 await disconnect_user_sessions(user_id)
+                asyncio.create_task(rc_sync.sync_user_role(updated_user))
+
+            # Sync name / email changes to Rocket.Chat
+            if form_data.name is not None or form_data.email is not None:
+                asyncio.create_task(rc_sync.sync_user_profile(updated_user))
+
             return updated_user
 
         raise HTTPException(
@@ -643,10 +651,14 @@ async def delete_user_by_id(user_id: str, user=Depends(get_admin_user), db: Asyn
         )
 
     if user.id != user_id:
+        # Fetch the full user record before deletion so we can clean up Rocket.Chat
+        target_user = await Users.get_user_by_id(user_id, db=db)
         result = await Auths.delete_auth_by_id(user_id, db=db)
 
         if result:
             await disconnect_user_sessions(user_id)
+            if target_user:
+                asyncio.create_task(rc_sync.delete_user(target_user))
             return True
 
         raise HTTPException(
