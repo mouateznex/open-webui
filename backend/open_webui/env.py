@@ -1068,3 +1068,15 @@ EXTERNAL_PWA_MANIFEST_URL = os.environ.get('EXTERNAL_PWA_MANIFEST_URL')
 # Env var values: "true" (anyone), "false" (no one), "members" (only group members).
 _default_group_share = os.environ.get('DEFAULT_GROUP_SHARE_PERMISSION', 'members').strip().lower()
 DEFAULT_GROUP_SHARE_PERMISSION = 'members' if _default_group_share == 'members' else _default_group_share == 'true'
+
+####################################
+# Rocket.Chat Integration
+####################################
+
+# Internal URL used by Open WebUI's backend to reach the Rocket.Chat API.
+# In Docker Compose this is the service name; in production use the private URL.
+ROCKETCHAT_URL = os.environ.get('ROCKETCHAT_URL', '')
+
+# Service-account credentials — a dedicated admin bot, not a real user account.
+ROCKETCHAT_ADMIN_USER = os.environ.get('ROCKETCHAT_ADMIN_USER', '')
+ROCKETCHAT_ADMIN_PASSWORD = os.environ.get('ROCKETCHAT_ADMIN_PASSWORD', '')

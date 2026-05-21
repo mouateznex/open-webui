@@ -538,6 +538,10 @@ from open_webui.env import (
     OAUTH_SERVER_CLIENT_ID,
     OAUTH_SERVER_CLIENT_SECRET,
     OAUTH_SERVER_REDIRECT_URIS,
+    # Rocket.Chat Integration
+    ROCKETCHAT_URL,
+    ROCKETCHAT_ADMIN_USER,
+    ROCKETCHAT_ADMIN_PASSWORD,
 )
 
 
@@ -736,6 +740,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             log.warning(f'Failed to initialize tool/terminal servers at startup: {e}')
 
+    # Rocket.Chat integration — initialise the shared API client if configured
+    from open_webui.utils import rocketchat as rc
+    rc.init(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
+
     # Mark application as ready to accept traffic from a startup perspective.
     app.state.startup_complete = True
 
@@ -745,6 +753,11 @@ async def lifespan(app: FastAPI):
     from open_webui.utils.session_pool import close_session
 
     await close_session()
+
+    # Close the Rocket.Chat HTTP client cleanly
+    from open_webui.utils import rocketchat as rc
+    if rc.is_configured():
+        await rc.get_client().close()
 
     if hasattr(app.state, 'redis_task_command_listener'):
         app.state.redis_task_command_listener.cancel()

@@ -18,6 +18,7 @@ services:
       - open-webui:/app/backend/data
     depends_on:
       - ollama
+      - rocketchat
     ports:
       - ${OPEN_WEBUI_PORT-3000}:8080
     environment:
@@ -30,6 +31,10 @@ services:
       - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET-change-me-in-production}'
       # Must match the callback URL configured in Rocket.Chat's Custom OAuth settings
       - 'OAUTH_SERVER_REDIRECT_URIS=${OAUTH_SERVER_REDIRECT_URIS-http://localhost:3100/_oauth/openwebui}'
+      # Rocket.Chat API client — internal service-to-service URL and admin credentials
+      - 'ROCKETCHAT_URL=http://rocketchat:3000'
+      - 'ROCKETCHAT_ADMIN_USER=${ROCKETCHAT_ADMIN_USER-rc_admin}'
+      - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD-change-me-in-production}'
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
