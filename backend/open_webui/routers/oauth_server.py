@@ -144,7 +144,12 @@ async def authorize(
         })
         # Redirect to Open WebUI login; after login the frontend will
         # follow the `redirect` param back to this endpoint.
-        return RedirectResponse(url=f'/auth?redirect=/oauth/authorize?{params}')
+        # The whole inner URL (path + query) MUST be URL-encoded as a single
+        # value, otherwise its `?`/`&` separators leak into /auth's own query
+        # string and the inner client_id/redirect_uri/state params are lost.
+        inner_url = f'/oauth/authorize?{params}'
+        login_query = urlencode({'redirect': inner_url})
+        return RedirectResponse(url=f'/auth?{login_query}')
 
     # Issue a single-use authorization code
     code = secrets.token_urlsafe(32)

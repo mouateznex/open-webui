@@ -153,11 +153,14 @@ class RocketChatBridge:
         Handles: stream-notify-logged / user-status
         Payload args: [[rc_user_id, username, status_code, statusText], ...]
         """
-        fields = data.get('fields', {})
+        if data.get('collection') != 'stream-notify-logged':
+            return
+
+        fields = data.get('fields') or {}
         if fields.get('eventName') != 'user-status':
             return
 
-        for entry in fields.get('args', []):
+        for entry in fields.get('args') or []:
             if not isinstance(entry, list) or len(entry) < 3:
                 continue
             rc_user_id, _username, status_code = entry[0], entry[1], entry[2]
@@ -190,9 +193,15 @@ class RocketChatBridge:
     # ------------------------------------------------------------------
 
     async def _on_room_message(self, data: dict) -> None:
-        fields = data.get('fields', {})
-        args = fields.get('args', [])
-        if not args:
+        # Defensive: only handle room-message stream frames shaped as expected.
+        # The DDP client now routes by stream + eventName, but guard anyway so a
+        # malformed frame (or a stray presence event) can never raise here.
+        if data.get('collection') != 'stream-room-messages':
+            return
+
+        fields = data.get('fields') or {}
+        args = fields.get('args') or []
+        if not args or not isinstance(args[0], dict):
             return
 
         rc_msg = args[0]
@@ -206,7 +215,7 @@ class RocketChatBridge:
         if not channel_id:
             return
 
-        content = rc_msg.get('msg', '').strip()
+        content = (rc_msg.get('msg') or '').strip()
         if not content:
             return
 

@@ -80,16 +80,66 @@ services:
     environment:
       - 'MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0'
       - 'MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0'
-      # Public URL Rocket.Chat is reachable at
-      - 'ROOT_URL=${ROCKETCHAT_URL-http://localhost:3100}'
+      # Public URL Rocket.Chat is reachable at (browser-facing)
+      - 'ROOT_URL=${ROCKETCHAT_PUBLIC_URL-http://localhost:3100}'
       - 'PORT=3000'
-      # Disable Rocket.Chat's own registration/login — Open WebUI is the only IdP
+
+      # --- Admin / service account auto-provisioning ---------------------------
+      # Rocket.Chat creates this admin on first boot. It MUST match the
+      # ROCKETCHAT_ADMIN_USER / ROCKETCHAT_ADMIN_PASSWORD that Open WebUI uses to
+      # authenticate against the Rocket.Chat REST + DDP APIs, otherwise the
+      # integration cannot log in. ADMIN_EMAIL must not collide with a real user.
+      - 'ADMIN_USERNAME=${ROCKETCHAT_ADMIN_USER-rc_admin}'
+      - 'ADMIN_PASS=${ROCKETCHAT_ADMIN_PASSWORD-change-me-in-production}'
+      - 'ADMIN_EMAIL=${ROCKETCHAT_ADMIN_EMAIL-rc-admin@example.com}'
+      # Skip the interactive setup wizard so the server is API-ready immediately.
+      - 'OVERWRITE_SETTING_Show_Setup_Wizard=completed'
+
+      # --- Disable Rocket.Chat's own registration/login (Open WebUI is the IdP) -
       - 'OVERWRITE_SETTING_Accounts_RegistrationForm=Disabled'
       - 'OVERWRITE_SETTING_Accounts_ShowFormLogin=false'
-      # Matrix federation (RC ≥ 5.0 built-in bridge; set MATRIX_HOMESERVER_DOMAIN to activate)
+
+      # --- Custom OAuth: "OpenWebUI" provider --------------------------------
+      # The provider name "OpenWebUI" yields the callback path /_oauth/openwebui,
+      # which must match OAUTH_SERVER_REDIRECT_URIS on the open-webui service.
+      #
+      # IMPORTANT: WEBUI_OAUTH_URL is used for BOTH the browser redirect
+      # (authorize) and the server-to-server calls (token/userinfo) Rocket.Chat
+      # makes. It must therefore resolve to Open WebUI *identically* from the
+      # user's browser AND from inside the rocketchat container. In production
+      # use the real public domain (it resolves everywhere). For local Docker
+      # Desktop, point WEBUI_OAUTH_URL at http://host.docker.internal:3000 and
+      # add "127.0.0.1 host.docker.internal" to your host's /etc/hosts so the
+      # browser resolves it too.
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI=true'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-url=${WEBUI_OAUTH_URL-${WEBUI_URL-http://host.docker.internal:3000}}'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-authorize_path=/oauth/authorize'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-token_path=/oauth/token'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-token_sent_via=payload'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-identity_path=/oauth/userinfo'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-identity_token_sent_via=header'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-scope=openid'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-id=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-secret=${OAUTH_SERVER_CLIENT_SECRET-change-me-in-production}'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-login_style=redirect'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-button_label_text=Sign in with Open WebUI'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-username_field=name'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-email_field=email'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-name_field=name'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-merge_users=true'
+      # Map the OIDC "roles" claim → Rocket.Chat roles (admin/user) automatically.
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-roles_claim=roles'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-merge_roles=true'
+
+      # --- Matrix federation (RC ≥ 5.0 built-in bridge) ----------------------
+      # Set MATRIX_HOMESERVER_DOMAIN to activate all three at once.
       - 'OVERWRITE_SETTING_Feature_Federation_Enabled=${MATRIX_HOMESERVER_DOMAIN:+true}'
       - 'OVERWRITE_SETTING_Feature_Federation_Matrix_Enabled=${MATRIX_HOMESERVER_DOMAIN:+true}'
       - 'OVERWRITE_SETTING_Feature_Federation_Domain=${MATRIX_HOMESERVER_DOMAIN-}'
+    extra_hosts:
+      # Lets the rocketchat container reach Open WebUI on the host (Docker Desktop)
+      # for the server-to-server OAuth token/userinfo calls.
+      - host.docker.internal:host-gateway
 
 volumes:
   ollama: {}

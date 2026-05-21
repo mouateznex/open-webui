@@ -42,6 +42,17 @@
 
 	let ldapUsername = '';
 
+	// Backend-served routes (e.g. the OAuth provider endpoints) are not part of
+	// the SvelteKit app, so goto() — which does SPA navigation — would never
+	// reach them. Use a full-page navigation for those, goto() for app routes.
+	const navigateTo = (path: string) => {
+		if (/^https?:\/\//i.test(path) || path.startsWith('/oauth/')) {
+			window.location.href = path;
+		} else {
+			goto(path);
+		}
+	};
+
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
 			console.log(sessionUser);
@@ -63,7 +74,7 @@
 				redirectPath = $page.url.searchParams.get('redirect') || '/';
 			}
 
-			goto(redirectPath);
+			navigateTo(redirectPath);
 			localStorage.removeItem('redirectPath');
 		}
 	};
@@ -168,7 +179,7 @@
 	onMount(async () => {
 		const redirectPath = $page.url.searchParams.get('redirect');
 		if ($user !== undefined) {
-			goto(redirectPath || '/');
+			navigateTo(redirectPath || '/');
 		} else {
 			if (redirectPath) {
 				localStorage.setItem('redirectPath', redirectPath);
