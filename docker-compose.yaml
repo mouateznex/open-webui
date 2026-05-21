@@ -22,11 +22,60 @@ services:
       - ${OPEN_WEBUI_PORT-3000}:8080
     environment:
       - 'OLLAMA_BASE_URL=http://ollama:11434'
-      - 'WEBUI_SECRET_KEY='
+      - 'WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY-change-me-in-production}'
+      # Public URL Open WebUI is reachable at (used in OIDC discovery document)
+      - 'WEBUI_URL=${WEBUI_URL-http://localhost:3000}'
+      # OAuth Server — credentials Rocket.Chat uses to authenticate against Open WebUI
+      - 'OAUTH_SERVER_CLIENT_ID=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
+      - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET-change-me-in-production}'
+      # Must match the callback URL configured in Rocket.Chat's Custom OAuth settings
+      - 'OAUTH_SERVER_REDIRECT_URIS=${OAUTH_SERVER_REDIRECT_URIS-http://localhost:3100/_oauth/openwebui}'
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # MongoDB — required by Rocket.Chat
+  # ---------------------------------------------------------------------------
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: unless-stopped
+    volumes:
+      - mongodb:/data/db
+    command: mongod --oplogSize 128 --replSet rs0
+    healthcheck:
+      test: >
+        bash -c "mongosh --quiet --eval
+        'try { rs.status().ok } catch(e) { rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongodb:27017\"}]}).ok }'"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Rocket.Chat
+  # ---------------------------------------------------------------------------
+  rocketchat:
+    image: registry.rocket.chat/rocketchat/rocket.chat:${ROCKETCHAT_TAG-latest}
+    container_name: rocketchat
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - ${ROCKETCHAT_PORT-3100}:3000
+    environment:
+      - 'MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0'
+      - 'MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0'
+      # Public URL Rocket.Chat is reachable at
+      - 'ROOT_URL=${ROCKETCHAT_URL-http://localhost:3100}'
+      - 'PORT=3000'
+      # Disable Rocket.Chat's own registration/login — Open WebUI is the only IdP
+      - 'OVERWRITE_SETTING_Accounts_RegistrationForm=Disabled'
+      - 'OVERWRITE_SETTING_Accounts_ShowFormLogin=false'
+
 volumes:
   ollama: {}
   open-webui: {}
+  mongodb: {}

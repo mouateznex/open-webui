@@ -606,6 +606,18 @@ OAUTH_SESSION_TOKEN_ENCRYPTION_KEY = os.environ.get('OAUTH_SESSION_TOKEN_ENCRYPT
 # This prevents unbounded session growth while allowing multi-device usage
 OAUTH_MAX_SESSIONS_PER_USER = int(os.environ.get('OAUTH_MAX_SESSIONS_PER_USER', '10'))
 
+####################################
+# OAuth Server (Open WebUI as IdP)
+# Used by Rocket.Chat Custom OAuth and
+# any other service that needs to
+# delegate authentication to Open WebUI.
+####################################
+
+OAUTH_SERVER_CLIENT_ID = os.environ.get('OAUTH_SERVER_CLIENT_ID', '')
+OAUTH_SERVER_CLIENT_SECRET = os.environ.get('OAUTH_SERVER_CLIENT_SECRET', '')
+# Comma-separated list of allowed redirect URIs for the registered client
+OAUTH_SERVER_REDIRECT_URIS = os.environ.get('OAUTH_SERVER_REDIRECT_URIS', '')
+
 # Token Exchange Configuration
 # Allows external apps to exchange OAuth tokens for OpenWebUI tokens
 ENABLE_OAUTH_TOKEN_EXCHANGE = os.environ.get('ENABLE_OAUTH_TOKEN_EXCHANGE', 'False').lower() == 'true'

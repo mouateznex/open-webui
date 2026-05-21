@@ -106,6 +106,7 @@ from open_webui.routers import (
     terminals,
     automations,
     calendar,
+    oauth_server,
 )
 
 from open_webui.routers.retrieval import (
@@ -533,6 +534,10 @@ from open_webui.env import (
     LOG_FORMAT,
     # OAuth Back-Channel Logout
     ENABLE_OAUTH_BACKCHANNEL_LOGOUT,
+    # OAuth Server (Open WebUI as Identity Provider)
+    OAUTH_SERVER_CLIENT_ID,
+    OAUTH_SERVER_CLIENT_SECRET,
+    OAUTH_SERVER_REDIRECT_URIS,
 )
 
 
@@ -772,6 +777,17 @@ app.state.config = AppConfig(
     redis_key_prefix=REDIS_KEY_PREFIX,
 )
 app.state.redis = None
+
+# OAuth Server — registered clients (Open WebUI acting as identity provider).
+# Rocket.Chat is pre-registered via env vars; additional clients can be added
+# at runtime by appending to this dict.
+app.state.oauth_server_clients = {}
+if OAUTH_SERVER_CLIENT_ID and OAUTH_SERVER_CLIENT_SECRET:
+    _redirect_uris = [u.strip() for u in OAUTH_SERVER_REDIRECT_URIS.split(',') if u.strip()]
+    app.state.oauth_server_clients[OAUTH_SERVER_CLIENT_ID] = {
+        'client_secret': OAUTH_SERVER_CLIENT_SECRET,
+        'redirect_uris': _redirect_uris,
+    }
 
 app.state.WEBUI_NAME = WEBUI_NAME
 app.state.LICENSE_METADATA = None
@@ -1402,6 +1418,10 @@ app.add_middleware(
 
 app.mount('/ws', socket_app)
 
+# OAuth Server — Open WebUI as identity provider for Rocket.Chat (and others).
+# Endpoints: /oauth/authorize, /oauth/token, /oauth/userinfo,
+#            /.well-known/openid-configuration
+app.include_router(oauth_server.router, tags=['oauth-server'])
 
 app.include_router(ollama.router, prefix='/ollama', tags=['ollama'])
 app.include_router(openai.router, prefix='/openai', tags=['openai'])
