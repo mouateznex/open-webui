@@ -353,7 +353,13 @@ class RocketChatBridge:
     # OW → RC (outbound messages)
     # ------------------------------------------------------------------
 
-    async def forward_to_rc(self, channel_id: str, content: str, ow_message_id: str) -> None:
+    async def forward_to_rc(
+        self,
+        channel_id: str,
+        content: str,
+        ow_message_id: str,
+        files: Optional[list] = None,
+    ) -> None:
         """
         Forward an Open WebUI message to Rocket.Chat.
         The ow_origin custom field prevents the DDP echo from being re-stored.
@@ -361,6 +367,10 @@ class RocketChatBridge:
 
         On success, the RC message ID is stored back on the OW message so
         later edits/pins/reactions can target the correct RC message.
+
+        If ``files`` is provided (list of dicts with at least an ``id`` key
+        pointing at OW file IDs), each file is uploaded into the RC room via
+        rooms.upload after the text message is sent.
         """
         from open_webui.models.channels import Channels
         from open_webui.utils.rocketchat import get_client, is_configured
@@ -373,36 +383,87 @@ class RocketChatBridge:
         if not room_id:
             return
 
+        rc = get_client()
+        rc_msg_id: Optional[str] = None
+
+        # 1) text message (skipped when there's no body but files are present —
+        #    rooms.upload itself takes a `msg` param to attach text to a file).
+        if content:
+            try:
+                rc_msg = await rc.send_message(
+                    room_id=room_id,
+                    text=content,
+                    custom_fields={_OW_ORIGIN_FIELD: True, 'ow_message_id': ow_message_id},
+                )
+                rc_msg_id = (rc_msg or {}).get('_id')
+            except Exception as e:
+                log.warning('Bridge forward_to_rc(text) failed for channel %s: %s', channel_id, e)
+
+        # 2) Each attached file is forwarded to RC's rooms.upload so it
+        #    appears as a real attachment in the RC client.
+        if files:
+            await self._forward_files_to_rc(rc, room_id, files, ow_message_id)
+
+        # 3) Persist the RC message id on the OW message
+        if rc_msg_id:
+            try:
+                from open_webui.models.messages import Messages
+                existing = await Messages.get_message_by_id(ow_message_id)
+                if existing:
+                    merged = {
+                        **(existing.data or {}),
+                        'rocketchat_message_id': rc_msg_id,
+                        'rocketchat_room_id': room_id,
+                    }
+                    from open_webui.internal.db import get_async_db_context
+                    from open_webui.models.messages import Message
+                    from sqlalchemy import update as sa_update
+                    async with get_async_db_context() as db:
+                        await db.execute(
+                            sa_update(Message).where(Message.id == ow_message_id).values(data=merged)
+                        )
+                        await db.commit()
+            except Exception as e:
+                log.debug('forward_to_rc: could not persist rc_msg_id (%s)', e)
+
+    async def _forward_files_to_rc(self, rc, room_id: str, files: list, ow_message_id: str) -> None:
+        """
+        Stream each Open WebUI file into Rocket.Chat's rooms.upload endpoint.
+        Soft-fails per-file so one bad attachment cannot lose the whole message.
+        """
         try:
-            rc = get_client()
-            rc_msg = await rc.send_message(
-                room_id=room_id,
-                text=content,
-                custom_fields={_OW_ORIGIN_FIELD: True, 'ow_message_id': ow_message_id},
-            )
-            rc_msg_id = (rc_msg or {}).get('_id')
-            if rc_msg_id:
-                # Persist the RC ID on the OW message so later edits/pins/etc
-                # can find the matching RC message.
-                try:
-                    from open_webui.models.messages import Messages
-                    existing = await Messages.get_message_by_id(ow_message_id)
-                    if existing:
-                        merged = {**(existing.data or {}),
-                                  'rocketchat_message_id': rc_msg_id,
-                                  'rocketchat_room_id': room_id}
-                        from open_webui.internal.db import get_async_db_context
-                        from open_webui.models.messages import Message
-                        from sqlalchemy import update as sa_update
-                        async with get_async_db_context() as db:
-                            await db.execute(
-                                sa_update(Message).where(Message.id == ow_message_id).values(data=merged)
-                            )
-                            await db.commit()
-                except Exception as e:
-                    log.debug('forward_to_rc: could not persist rc_msg_id (%s)', e)
+            from open_webui.models.files import Files as FilesModel
+            from open_webui.storage.provider import Storage
         except Exception as e:
-            log.warning('Bridge forward_to_rc failed for channel %s: %s', channel_id, e)
+            log.warning('Bridge _forward_files_to_rc imports failed: %s', e)
+            return
+
+        for f in files:
+            file_id = (f or {}).get('id') if isinstance(f, dict) else None
+            if not file_id:
+                continue
+            try:
+                file_row = await FilesModel.get_file_by_id(file_id)
+                if not file_row or not getattr(file_row, 'path', None):
+                    continue
+                local_path = Storage.get_file(file_row.path)
+                with open(local_path, 'rb') as fh:
+                    content = fh.read()
+                if not content:
+                    continue
+                ct = (
+                    (file_row.meta or {}).get('content_type')
+                    if file_row.meta else None
+                ) or 'application/octet-stream'
+                await rc.upload_to_room(
+                    room_id=room_id,
+                    filename=file_row.filename or 'file',
+                    content=content,
+                    content_type=ct,
+                    description=f.get('description') if isinstance(f, dict) else None,
+                )
+            except Exception as exc:
+                log.warning('Bridge _forward_files_to_rc: file %s failed: %s', file_id, exc)
 
 
 # ---------------------------------------------------------------------------

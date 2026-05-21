@@ -729,6 +729,70 @@
 		}
 	};
 
+	// Rocket.Chat per-user notification stream — drives real-time sidebar
+	// badge updates. The bridge forwards stream-notify-user events to the
+	// authenticated user's Socket.IO room as 'rocketchat:notification'.
+	const rocketchatNotificationHandler = async (event) => {
+		try {
+			const ev = event?.event ?? '';
+			const args = event?.args ?? [];
+
+			if (ev === 'subscriptions-changed' && args.length >= 2) {
+				const sub = args[1] ?? {};
+				const rcRoomId = sub.rid;
+				const unread = sub.unread ?? 0;
+				const userMentions = sub.userMentions ?? 0;
+				if (!rcRoomId) return;
+
+				channels.update((list) =>
+					(list ?? []).map((ch) => {
+						const owRcRoomId = ch?.data?.rocketchat_room_id;
+						if (owRcRoomId === rcRoomId) {
+							return {
+								...ch,
+								unread_count: unread,
+								user_mentions: userMentions
+							};
+						}
+						return ch;
+					})
+				);
+			} else if (ev === 'rooms-changed' && args.length >= 2) {
+				const room = args[1] ?? {};
+				const rcRoomId = room._id;
+				const lastMessage = room.lastMessage;
+				if (!rcRoomId || !lastMessage) return;
+
+				channels.update((list) =>
+					(list ?? []).map((ch) => {
+						if (ch?.data?.rocketchat_room_id === rcRoomId) {
+							const ts =
+								(typeof lastMessage.ts === 'object' && lastMessage.ts.$date) ||
+								Date.parse(lastMessage.ts) ||
+								Date.now();
+							return { ...ch, last_message_at: ts * 1_000_000 };
+						}
+						return ch;
+					})
+				);
+			} else if (ev === 'notification' && args.length >= 1) {
+				const note = args[0] ?? {};
+				if ($isLastActiveTab && ($settings?.notificationEnabled ?? false)) {
+					try {
+						new Notification(note.title || 'Rocket.Chat', {
+							body: note.text || '',
+							icon: '/static/favicon.png'
+						});
+					} catch (_) {
+						/* notifications may be blocked */
+					}
+				}
+			}
+		} catch (err) {
+			console.warn('rocketchatNotificationHandler error:', err);
+		}
+	};
+
 	const TOKEN_EXPIRY_BUFFER = 60; // seconds
 	const checkTokenExpiry = async () => {
 		const exp = $user?.expires_at; // token expiry time in unix timestamp
@@ -971,9 +1035,11 @@
 			if (value) {
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('events:channel', channelEventHandler);
+				$socket?.off('rocketchat:notification', rocketchatNotificationHandler);
 
 				$socket?.on('events', chatEventHandler);
 				$socket?.on('events:channel', channelEventHandler);
+				$socket?.on('rocketchat:notification', rocketchatNotificationHandler);
 
 				const userSettings = await getUserSettings(localStorage.token);
 				if (userSettings) {
@@ -991,6 +1057,7 @@
 			} else {
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('events:channel', channelEventHandler);
+				$socket?.off('rocketchat:notification', rocketchatNotificationHandler);
 			}
 		});
 

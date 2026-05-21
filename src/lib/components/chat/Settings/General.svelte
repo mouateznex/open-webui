@@ -10,6 +10,7 @@
 
 	import AdvancedParams from './Advanced/AdvancedParams.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
+	import { subscribeAndRegisterPush, syncPushPreferences } from '$lib/utils/push';
 	export let saveSettings: Function;
 	export let getModels: Function;
 
@@ -30,6 +31,25 @@
 		if (permission === 'granted') {
 			notificationEnabled = !notificationEnabled;
 			saveSettings({ notificationEnabled: notificationEnabled });
+
+			// When enabling, also subscribe to Web Push and forward the device
+			// token to Rocket.Chat's push gateway. Falls back gracefully when
+			// VAPID isn't configured or the browser doesn't support Push.
+			if (notificationEnabled && $config?.features?.rocketchat_enabled) {
+				try {
+					await subscribeAndRegisterPush({
+						userId: $user?.id ?? '',
+						vapidPublicKey: $config?.features?.web_push_vapid_public_key ?? null
+					});
+					await syncPushPreferences($user?.id ?? '', {
+						desktopNotifications: 'all',
+						mobileNotifications: 'all',
+						pushNotifications: 'all'
+					});
+				} catch (err) {
+					console.warn('Push setup failed:', err);
+				}
+			}
 		} else {
 			toast.error(
 				$i18n.t(

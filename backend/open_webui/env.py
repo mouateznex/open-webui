@@ -1102,3 +1102,8 @@ MATRIX_HOMESERVER_DOMAIN = os.environ.get('MATRIX_HOMESERVER_DOMAIN', '')
 # the dead-letter file are stored here; they survive restarts.
 # Defaults to <DATA_DIR>/rc_sync_queue when unset.
 RC_SYNC_QUEUE_DIR = os.environ.get('RC_SYNC_QUEUE_DIR', '')
+
+# Web Push VAPID public key — used by browsers to subscribe to push events.
+# When unset, the in-browser Web Push subscribe call is skipped and only
+# the foreground browser Notification API is used.
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')

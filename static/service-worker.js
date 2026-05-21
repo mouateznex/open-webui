@@ -8,7 +8,7 @@
  * the network because they are user-specific and change frequently.
  */
 
-const CACHE_VERSION = 'open-webui-shell-v3';
+const CACHE_VERSION = 'open-webui-shell-v4';
 const SHELL_URLS = [
 	'/',
 	'/teams',
@@ -112,4 +112,48 @@ self.addEventListener('fetch', (event) => {
 			)
 		);
 	}
+});
+
+/* ---------------------------------------------------------------------- */
+/* Web Push handler                                                       */
+/* ---------------------------------------------------------------------- */
+
+self.addEventListener('push', (event) => {
+	if (!event.data) return;
+	let payload;
+	try {
+		payload = event.data.json();
+	} catch (_) {
+		payload = { title: 'Open WebUI', body: event.data.text() };
+	}
+
+	const title = payload.title || payload.notification?.title || 'Open WebUI';
+	const body =
+		payload.body || payload.message || payload.notification?.body || '';
+	const channelId = payload.channel_id || payload.data?.channel_id || null;
+	const url = payload.url || (channelId ? `/channels/${channelId}` : '/');
+
+	event.waitUntil(
+		self.registration.showNotification(title, {
+			body,
+			icon: '/static/web-app-manifest-192x192.png',
+			badge: '/static/favicon.png',
+			data: { url }
+		})
+	);
+});
+
+self.addEventListener('notificationclick', (event) => {
+	event.notification.close();
+	const url = event.notification.data?.url || '/';
+	event.waitUntil(
+		self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+			for (const client of clientList) {
+				if (client.url.includes(url) && 'focus' in client) {
+					return client.focus();
+				}
+			}
+			return self.clients.openWindow(url);
+		})
+	);
 });

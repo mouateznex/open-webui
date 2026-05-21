@@ -15,11 +15,12 @@
 
 	import { formatDate } from '$lib/utils';
 
-	import { settings, user, shortCodesToEmojis } from '$lib/stores';
+	import { settings, user, shortCodesToEmojis, config } from '$lib/stores';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { getMessageData } from '$lib/apis/channels';
 
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
+	import URLPreview from '$lib/components/channel/URLPreview.svelte';
 	import ProfileImage from '$lib/components/chat/Messages/ProfileImage.svelte';
 	import Name from '$lib/components/chat/Messages/Name.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
@@ -534,6 +535,10 @@
 									>{/if}
 							{/if}
 						</div>
+
+						{#if $config?.features?.rocketchat_enabled && (message?.content ?? '').match(/https?:\/\//i)}
+							<URLPreview channelId={channel?.id} content={message.content ?? ''} />
+						{/if}
 
 						{#if (message?.reactions ?? []).length > 0}
 							<div>

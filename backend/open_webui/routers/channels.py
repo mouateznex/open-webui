@@ -1682,9 +1682,10 @@ async def post_new_message(
 
         background_tasks.add_task(background_handler)
 
-        # Forward the message to Rocket.Chat (OW → RC direction)
+        # Forward the message + any attached files to Rocket.Chat (OW → RC direction)
+        attached_files = (message.data or {}).get('files') or []
         asyncio.create_task(
-            _rc_bridge().forward_to_rc(channel.id, message.content, message.id)
+            _rc_bridge().forward_to_rc(channel.id, message.content, message.id, files=attached_files)
         )
 
         return message

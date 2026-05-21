@@ -56,6 +56,7 @@ from open_webui.config import (
 )
 from open_webui.utils.oauth import auth_manager_config
 from open_webui.utils import rocketchat_sync as rc_sync
+from open_webui.utils import rc_sync_queue
 from pydantic import BaseModel
 
 from open_webui.utils.misc import parse_duration, validate_email_format
@@ -247,7 +248,7 @@ async def update_profile(
             db=db,
         )
         if user:
-            asyncio.create_task(rc_sync.sync_user_profile(user))
+            await rc_sync_queue.enqueue('user.profile', {'user_id': user.id})
             return user
         else:
             raise HTTPException(400, detail=ERROR_MESSAGES.DEFAULT())

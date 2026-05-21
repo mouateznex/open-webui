@@ -21,6 +21,7 @@
 	import Pin from '../icons/Pin.svelte';
 	import PinnedMessagesModal from './PinnedMessagesModal.svelte';
 	import SearchModal from './SearchModal.svelte';
+	import HighlightsModal from './HighlightsModal.svelte';
 
 	import { sendMessage } from '$lib/apis/channels';
 
@@ -29,20 +30,41 @@
 	let showChannelPinnedMessagesModal = false;
 	let showChannelInfoModal = false;
 	let showSearchModal = false;
+	let showHighlightsModal = false;
 
 	const startVideoCall = async () => {
-		if (!channel || !$config?.features?.jitsi_url) return;
-		const sanitized = (channel.name ?? channel.id)
-			.toLowerCase()
-			.replace(/[^a-z0-9]/g, '-')
-			.replace(/-+/g, '-')
-			.replace(/^-|-$/g, '')
-			.slice(0, 32) || channel.id.slice(0, 8);
-		const callUrl = `${$config.features.jitsi_url}/owui-${sanitized}`;
-		await sendMessage(localStorage.token, channel.id, {
-			content: `📹 **Video call started** — [Join here](${callUrl})`
-		}).catch((err) => toast.error(`${err}`));
-		window.open(callUrl, '_blank');
+		if (!channel) return;
+		// Hit the backend endpoint — it tries RC's video plugin first
+		// (Jitsi/BBB through video-conference.start) and falls back to a
+		// deterministic Jitsi URL when RC isn't configured. Either way we get
+		// a real URL to open and the room participants get a notification
+		// inside Rocket.Chat.
+		try {
+			const res = await fetch(
+				`${WEBUI_API_BASE_URL}/channels/${channel.id}/video-call`,
+				{
+					method: 'POST',
+					headers: { Authorization: `Bearer ${localStorage.token}` }
+				}
+			);
+			if (!res.ok) {
+				const detail = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+				throw new Error(detail);
+			}
+			const data = await res.json();
+			const callUrl = data?.url || data?.rc_call?.url;
+			if (!callUrl) {
+				toast.error($i18n.t('No video call URL was returned. Configure JITSI_URL or RC video conferencing.'));
+				return;
+			}
+			// Drop a chat message with the URL so other members can join.
+			await sendMessage(localStorage.token, channel.id, {
+				content: `📹 **Video call started** — [Join here](${callUrl})`
+			}).catch((err) => toast.error(`${err}`));
+			window.open(callUrl, '_blank');
+		} catch (err) {
+			toast.error(`${err}`);
+		}
 	};
 
 	const hasPublicReadGrant = (grants: any) =>
@@ -73,6 +95,7 @@
 <PinnedMessagesModal bind:show={showChannelPinnedMessagesModal} {channel} {onPin} />
 <ChannelInfoModal bind:show={showChannelInfoModal} {channel} {onUpdate} />
 <SearchModal bind:show={showSearchModal} {channel} />
+<HighlightsModal bind:show={showHighlightsModal} {channel} />
 <nav class="sticky top-0 z-30 w-full px-1.5 py-1 -mb-8 flex items-center drag-region flex flex-col">
 	<div
 		id="navbar-bg-gradient-to-b"
@@ -177,7 +200,7 @@
 				class="self-start flex flex-none items-center text-gray-600 dark:text-gray-400 gap-1 shrink-0"
 			>
 				{#if channel}
-					{#if $config?.features?.jitsi_url && channel?.type !== 'dm'}
+					{#if (($config?.features?.jitsi_url) || $config?.features?.rocketchat_enabled) && channel?.type !== 'dm'}
 						<Tooltip content={$i18n.t('Start Video Call')}>
 							<button
 								class=" flex cursor-pointer py-1.5 px-1.5 border dark:border-gray-850 border-gray-50 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-850 transition"
@@ -241,6 +264,34 @@
 							</div>
 						</button>
 					</Tooltip>
+
+					{#if $config?.features?.rocketchat_enabled}
+						<Tooltip content={$i18n.t('Starred & Threads')}>
+							<button
+								class=" flex cursor-pointer py-1.5 px-1.5 border dark:border-gray-850 border-gray-50 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-850 transition"
+								aria-label="Starred & Threads"
+								type="button"
+								on:click={() => {
+									showHighlightsModal = true;
+								}}
+							>
+								<div class=" flex items-center gap-0.5 m-auto self-center shrink-0">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 24 24"
+										fill="currentColor"
+										class="size-4"
+									>
+										<path
+											fill-rule="evenodd"
+											d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.007 5.404.434c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 5.373 22.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.434 2.082-5.006Z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+								</div>
+							</button>
+						</Tooltip>
+					{/if}
 
 					{#if channel?.user_count !== undefined}
 						<Tooltip content={$i18n.t('Users')}>
