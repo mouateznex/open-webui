@@ -72,6 +72,7 @@
 	let draggedOver = false;
 
 	let recording = false;
+	let audioMessageRecording = false;
 	let content = '';
 	let files = [];
 
@@ -767,7 +768,23 @@
 			<div
 				class="{disabled ? 'opacity-50 pointer-events-none cursor-not-allowed' : ''} relative z-20"
 			>
-				{#if recording}
+				{#if audioMessageRecording}
+					<VoiceRecording
+						bind:recording={audioMessageRecording}
+						transcribe={false}
+						onCancel={async () => {
+							audioMessageRecording = false;
+							await tick();
+							if (chatInputElement) chatInputElement.focus();
+						}}
+						onConfirm={async ({ file }) => {
+							audioMessageRecording = false;
+							await tick();
+							uploadFileHandler(file);
+							if (chatInputElement) chatInputElement.focus();
+						}}
+					/>
+				{:else if recording}
 					<VoiceRecording
 						bind:recording
 						onCancel={async () => {
@@ -1014,6 +1031,50 @@
 
 								<div class="self-end flex space-x-1 mr-1">
 									{#if content === ''}
+										<Tooltip content={$i18n.t('Send audio message')}>
+											<button
+												class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 mr-0.5 self-center"
+												type="button"
+												aria-label="Send Audio Message"
+												on:click={async () => {
+													try {
+														const stream = await navigator.mediaDevices
+															.getUserMedia({ audio: true })
+															.catch((err) => {
+																toast.error(
+																	$i18n.t(
+																		`Permission denied when accessing microphone: {{error}}`,
+																		{ error: err }
+																	)
+																);
+																return null;
+															});
+														if (stream) {
+															audioMessageRecording = true;
+															stream.getTracks().forEach((t) => t.stop());
+														}
+													} catch {
+														toast.error($i18n.t('Permission denied when accessing microphone'));
+													}
+												}}
+											>
+												<!-- Waveform / audio message icon -->
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 24 24"
+													fill="currentColor"
+													class="w-5 h-5"
+												>
+													<path
+														d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM18.584 5.106a.75.75 0 0 1 1.06 0c3.808 3.807 3.808 9.98 0 13.788a.75.75 0 0 1-1.06-1.06 8.25 8.25 0 0 0 0-11.668.75.75 0 0 1 0-1.06Z"
+													/>
+													<path
+														d="M15.932 7.757a.75.75 0 0 1 1.061 0 6 6 0 0 1 0 8.486.75.75 0 0 1-1.06-1.061 4.5 4.5 0 0 0 0-6.364.75.75 0 0 1 0-1.06Z"
+													/>
+												</svg>
+											</button>
+										</Tooltip>
+
 										<Tooltip content={$i18n.t('Record voice')}>
 											<button
 												id="voice-input-button"

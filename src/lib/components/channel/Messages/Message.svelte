@@ -458,6 +458,8 @@
 										<Image src={fileUrl} alt={file.name} imageClassName=" max-h-96 rounded-lg" />
 									{:else if file.type === 'video' || (file?.content_type ?? '').startsWith('video/')}
 										<video src={fileUrl} controls class=" max-h-96 rounded-lg"></video>
+									{:else if file.type === 'audio' || (file?.content_type ?? '').startsWith('audio/')}
+										<audio src={fileUrl} controls class="max-w-full rounded-lg"></audio>
 									{:else}
 										<FileItem
 											item={file}

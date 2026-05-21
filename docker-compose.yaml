@@ -38,6 +38,8 @@ services:
       # Rocket.Chat outgoing webhook token for /rocketchat/slash (AI slash commands)
       - 'ROCKETCHAT_SLASH_TOKEN=${ROCKETCHAT_SLASH_TOKEN-}'
       - 'ROCKETCHAT_SLASH_MODEL=${ROCKETCHAT_SLASH_MODEL-}'
+      # Jitsi video call server (empty = feature disabled)
+      - 'JITSI_URL=${JITSI_URL-}'
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped

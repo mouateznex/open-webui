@@ -1087,3 +1087,8 @@ ROCKETCHAT_SLASH_TOKEN = os.environ.get('ROCKETCHAT_SLASH_TOKEN', '')
 
 # Which AI model to use for /ask replies. Empty = use the app's default model.
 ROCKETCHAT_SLASH_MODEL = os.environ.get('ROCKETCHAT_SLASH_MODEL', '')
+
+# Jitsi / video call integration
+# Set to any Jitsi-compatible server URL (e.g. https://meet.jit.si) to enable
+# the "Start Video Call" button in channel navbars.
+JITSI_URL = os.environ.get('JITSI_URL', '')

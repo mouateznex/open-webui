@@ -2,7 +2,7 @@
 	import { getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
-	import { mobile, showArchivedChats, showSidebar, user } from '$lib/stores';
+	import { mobile, showArchivedChats, showSidebar, user, config } from '$lib/stores';
 
 	import { slide } from 'svelte/transition';
 	import { page } from '$app/stores';
@@ -22,11 +22,28 @@
 	import PinnedMessagesModal from './PinnedMessagesModal.svelte';
 	import SearchModal from './SearchModal.svelte';
 
+	import { sendMessage } from '$lib/apis/channels';
+
 	const i18n = getContext('i18n');
 
 	let showChannelPinnedMessagesModal = false;
 	let showChannelInfoModal = false;
 	let showSearchModal = false;
+
+	const startVideoCall = async () => {
+		if (!channel || !$config?.features?.jitsi_url) return;
+		const sanitized = (channel.name ?? channel.id)
+			.toLowerCase()
+			.replace(/[^a-z0-9]/g, '-')
+			.replace(/-+/g, '-')
+			.replace(/^-|-$/g, '')
+			.slice(0, 32) || channel.id.slice(0, 8);
+		const callUrl = `${$config.features.jitsi_url}/owui-${sanitized}`;
+		await sendMessage(localStorage.token, channel.id, {
+			content: `📹 **Video call started** — [Join here](${callUrl})`
+		}).catch((err) => toast.error(`${err}`));
+		window.open(callUrl, '_blank');
+	};
 
 	const hasPublicReadGrant = (grants: any) =>
 		Array.isArray(grants) &&
@@ -160,6 +177,30 @@
 				class="self-start flex flex-none items-center text-gray-600 dark:text-gray-400 gap-1 shrink-0"
 			>
 				{#if channel}
+					{#if $config?.features?.jitsi_url && channel?.type !== 'dm'}
+						<Tooltip content={$i18n.t('Start Video Call')}>
+							<button
+								class=" flex cursor-pointer py-1.5 px-1.5 border dark:border-gray-850 border-gray-50 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-850 transition"
+								aria-label="Start Video Call"
+								type="button"
+								on:click={startVideoCall}
+							>
+								<div class=" flex items-center gap-0.5 m-auto self-center shrink-0">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 24 24"
+										fill="currentColor"
+										class="size-4"
+									>
+										<path
+											d="M4.5 4.5a3 3 0 0 0-3 3v9a3 3 0 0 0 3 3h8.25a3 3 0 0 0 3-3v-9a3 3 0 0 0-3-3H4.5ZM19.94 18.75l-2.69-2.69V7.94l2.69-2.69c.944-.945 2.56-.276 2.56 1.06v11.38c0 1.336-1.616 2.005-2.56 1.06Z"
+										/>
+									</svg>
+								</div>
+							</button>
+						</Tooltip>
+					{/if}
+
 					<Tooltip content={$i18n.t('Search Messages')}>
 						<button
 							class=" flex cursor-pointer py-1.5 px-1.5 border dark:border-gray-850 border-gray-50 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-850 transition"
