@@ -1,25 +1,32 @@
 # Backend files that make up the Rocket.Chat integration.
 #
 # Two categories:
-#   [COPY]  — new, RC-only files. Copy verbatim into the target tree.
-#   [MERGE] — existing Open WebUI files that need a small RC hook added.
-#             See patch-notes.md for the exact block/import/route to add.
+#   [COPY]  — new, RC-only files. Copies live in backend/utils/ and backend/routers/
+#             below this directory. Drop them verbatim into the target project.
+#   [MERGE] — existing Open WebUI files that need small RC additions.
+#             Snippet files for each live in backend/snippets/. Apply them
+#             at the insertion points described in patch-notes.md and inside
+#             each snippet's header comment.
 #
-# Paths are relative to the repository root.
+# Paths are relative to the repository root (not this package directory).
 
-# --- [COPY] new files — drop in as-is --------------------------------------
-[COPY] backend/open_webui/utils/rocketchat.py            # RocketChatClient: REST API wrapper, init(), is_configured()
-[COPY] backend/open_webui/utils/rocketchat_sync.py       # sync handlers (user/channel/dm create/update/delete) + queue registration
-[COPY] backend/open_webui/utils/rocketchat_bridge.py     # DDP real-time bridge; OW->RC message/pin/edit/delete/react forwarding
-[COPY] backend/open_webui/utils/rc_sync_queue.py         # persistent job queue with exponential backoff + dead-letter
-[COPY] backend/open_webui/utils/ddp_client.py            # low-level DDP (Meteor WebSocket) protocol client
-[COPY] backend/open_webui/routers/rocketchat_extras.py   # /api/v1/rocketchat/* + /api/v1/search + /api/v1/teams
-[COPY] backend/open_webui/routers/rocketchat_integrations.py  # /rocketchat/slash outgoing-webhook (/ask AI command)
-[COPY] backend/open_webui/routers/oauth_server.py        # OAuth2/OIDC IdP: /.well-known, /oauth/authorize|token|userinfo
+# --- [COPY] new files — drop in as-is, they are included here ---------------
 
-# --- [MERGE] existing files — add the RC hook (see patch-notes.md) ----------
-[MERGE] backend/open_webui/env.py                        # add the "Rocket.Chat Integration" env block
-[MERGE] backend/open_webui/main.py                       # import env vars; register 3 routers; startup init + queue + bridge; /api/config flags
-[MERGE] backend/open_webui/routers/auths.py              # enqueue 'user.profile' on signup/login
-[MERGE] backend/open_webui/routers/users.py              # enqueue user.role/profile/status/delete + RC admin endpoints
-[MERGE] backend/open_webui/routers/channels.py           # enqueue channel.* + dm.create; bridge forward on send/pin/edit/delete/react; RC-augmented search
+#  Source location in THIS package            → Target path in project
+#  -----------------------------------------------------------------------
+[COPY] backend/utils/rocketchat.py            → backend/open_webui/utils/rocketchat.py
+[COPY] backend/utils/rocketchat_sync.py       → backend/open_webui/utils/rocketchat_sync.py
+[COPY] backend/utils/rocketchat_bridge.py     → backend/open_webui/utils/rocketchat_bridge.py
+[COPY] backend/utils/rc_sync_queue.py         → backend/open_webui/utils/rc_sync_queue.py
+[COPY] backend/utils/ddp_client.py            → backend/open_webui/utils/ddp_client.py
+[COPY] backend/routers/rocketchat_extras.py         → backend/open_webui/routers/rocketchat_extras.py
+[COPY] backend/routers/rocketchat_integrations.py   → backend/open_webui/routers/rocketchat_integrations.py
+[COPY] backend/routers/oauth_server.py              → backend/open_webui/routers/oauth_server.py
+
+# --- [MERGE] existing files — apply the snippet (see backend/snippets/) -----
+
+[MERGE] backend/snippets/env.py.snippet       → append block to backend/open_webui/env.py
+[MERGE] backend/snippets/main.py.snippet      → 6 insertion points in backend/open_webui/main.py
+[MERGE] backend/snippets/auths.py.snippet     → 2 insertions in backend/open_webui/routers/auths.py
+[MERGE] backend/snippets/users.py.snippet     → imports + enqueues + new endpoints in users.py
+[MERGE] backend/snippets/channels.py.snippet  → imports + enqueues + search + new endpoints in channels.py

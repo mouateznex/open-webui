@@ -1,0 +1,18 @@
+# =============================================================================
+# SNIPPET: add to backend/open_webui/routers/auths.py
+# =============================================================================
+
+# --- INSERTION 1 ---
+# WHERE: top of file, alongside other `from open_webui...` imports
+# ADD:
+
+from open_webui.utils import rocketchat_sync as rc_sync  # noqa: F401 (registers handlers)
+from open_webui.utils import rc_sync_queue
+
+# --- INSERTION 2 ---
+# WHERE: inside the update-user-profile endpoint handler, after a successful
+#        call to Users.update_user_by_id() that returns a user object.
+#        Search for: `if user:` / `return user` in the profile-update path.
+# ADD before `return user`:
+
+            await rc_sync_queue.enqueue('user.profile', {'user_id': user.id})

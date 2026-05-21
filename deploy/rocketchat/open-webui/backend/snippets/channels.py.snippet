@@ -1,0 +1,233 @@
+# =============================================================================
+# SNIPPET: add to backend/open_webui/routers/channels.py
+# =============================================================================
+# channels.py has more insertion points than the other MERGE files.
+# All RC additions are guarded by `is_configured()` checks, so they
+# are no-ops when the integration is disabled.
+# =============================================================================
+
+# --- INSERTION 1 ---
+# WHERE: top of file, alongside other `from open_webui...` imports
+# ADD:
+
+from open_webui.utils import rocketchat_sync as rc_sync  # noqa: F401 (registers handlers)
+from open_webui.utils import rc_sync_queue
+from open_webui.utils.rocketchat_bridge import get_bridge as _rc_bridge
+
+# --- INSERTION 2 ---
+# WHERE: inside the create-channel endpoint, just before `return channel`.
+#        Add the DM variant when channel.type == 'dm' and the regular variant otherwise.
+# ADD:
+
+        if channel.type == 'dm':
+            await rc_sync_queue.enqueue('dm.create', {'channel_id': channel.id})
+        else:
+            await rc_sync_queue.enqueue('channel.create', {'channel_id': channel.id})
+
+# --- INSERTION 3 ---
+# WHERE: inside the update-channel endpoint, after the OW update succeeds.
+# ADD:
+
+    await rc_sync_queue.enqueue('channel.update', {
+        'channel_id': channel.id,
+        'name': form_data.name,
+        'description': form_data.description,
+    })
+
+# --- INSERTION 4 ---
+# WHERE: inside the delete-channel endpoint, after reading the channel, before deleting.
+#        Capture the RC room ID before deletion so the queue handler can use it.
+# ADD:
+
+    data = channel.data or {}
+    await rc_sync_queue.enqueue('channel.delete', {
+        'channel_id': channel.id,
+        'rc_room_id': data.get('rocketchat_room_id'),
+    })
+
+# --- INSERTION 5 ---
+# WHERE: inside the send-message endpoint, after the OW message is saved.
+# ADD (bridge forwards to RC, returns RC message id stored back on the message):
+
+        _rc_bridge().forward_to_rc(channel.id, message.content, message.id, files=attached_files)
+
+# --- INSERTION 6 (NEW FUNCTION) ---
+# WHERE: inside the search-messages endpoint. Replace or augment the existing
+#        local-only search with this RC-augmented version.
+# The full search block reads local OW messages AND merges in RC hits:
+
+    rc_messages: list = []
+    rc_room_id = (channel.data or {}).get('rocketchat_room_id') if channel.data else None
+    try:
+        from open_webui.utils.rocketchat import is_configured, get_client
+        if rc_room_id and is_configured():
+            rc_messages = await get_client().search_messages(rc_room_id, query, count=min(limit, 100))
+    except Exception as exc:
+        log.warning('RC chat.search failed for channel %s: %s', channel.id, exc)
+        rc_messages = []
+
+    local_messages = await Messages.search_messages_by_channel_ids([id], query, limit=min(limit, 100), db=db)
+
+    seen_rc_ids: set = set()
+    merged: list = []
+    for m in local_messages:
+        seen_rc_ids.add((m.data or {}).get('rocketchat_message_id'))
+
+    # Merge RC hits (full-text scored) then local-only hits
+    for rc_msg in rc_messages:
+        rc_id = rc_msg.get('_id')
+        if rc_id and rc_id in seen_rc_ids:
+            continue
+        author = rc_msg.get('u') or {}
+        owui_user = None
+        for em in (author.get('emails') or []):
+            address = em.get('address') if isinstance(em, dict) else None
+            if address:
+                owui_user = await Users.get_user_by_email(address, db=db)
+                if owui_user:
+                    break
+        merged.append(
+            MessageUserResponse(
+                id=rc_id or '',
+                channel_id=channel.id,
+                user_id=owui_user.id if owui_user else (author.get('_id') or ''),
+                content=rc_msg.get('msg', ''),
+                data={'rocketchat_message_id': rc_id, 'rocketchat_room_id': rc_room_id},
+                meta={'rocketchat': True},
+                parent_id=rc_msg.get('tmid'),
+                created_at=0,
+                updated_at=0,
+                user=UserNameResponse(id=owui_user.id if owui_user else '', name=author.get('name') or author.get('username') or '', role='user'),
+            )
+        )
+
+    merged.extend(local_messages)
+    return merged
+
+# --- INSERTION 7 (NEW ENDPOINTS) ---
+# WHERE: append these new endpoint functions to the bottom of channels.py router,
+#        before any existing module-level `router.include_router` calls if present.
+
+class ChannelTopicForm(BaseModel):
+    topic: str = ''
+
+
+@router.post('/{id}/topic', response_model=bool)
+async def set_channel_topic(id: str, form_data: ChannelTopicForm, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+    await rc_sync_queue.enqueue('channel.topic', {'channel_id': id, 'topic': form_data.topic})
+    return True
+
+
+class ChannelAnnouncementForm(BaseModel):
+    announcement: str = ''
+
+
+@router.post('/{id}/announcement', response_model=bool)
+async def set_channel_announcement(id: str, form_data: ChannelAnnouncementForm, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+    await rc_sync_queue.enqueue('channel.announcement', {'channel_id': id, 'announcement': form_data.announcement})
+    return True
+
+
+class ChannelReadOnlyForm(BaseModel):
+    read_only: bool
+
+
+@router.post('/{id}/read-only', response_model=bool)
+async def set_channel_read_only(id: str, form_data: ChannelReadOnlyForm, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+    await rc_sync_queue.enqueue('channel.read_only', {'channel_id': id, 'read_only': form_data.read_only})
+    return True
+
+
+class ChannelArchiveForm(BaseModel):
+    archived: bool
+
+
+@router.post('/{id}/archive', response_model=bool)
+async def set_channel_archive(id: str, form_data: ChannelArchiveForm, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+    await rc_sync_queue.enqueue('channel.archive', {'channel_id': id, 'archived': form_data.archived})
+    return True
+
+
+class ChannelJoinCodeForm(BaseModel):
+    join_code: str = ''
+
+
+@router.post('/{id}/join-code', response_model=bool)
+async def set_channel_join_code(id: str, form_data: ChannelJoinCodeForm, user=Depends(get_admin_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    await rc_sync_queue.enqueue('channel.join_code', {'channel_id': id, 'join_code': form_data.join_code})
+    return True
+
+
+class ChannelDefaultForm(BaseModel):
+    default: bool
+
+
+@router.post('/{id}/default', response_model=bool)
+async def set_channel_default(id: str, form_data: ChannelDefaultForm, user=Depends(get_admin_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    await rc_sync_queue.enqueue('channel.default', {'channel_id': id, 'default': form_data.default})
+    return True
+
+
+class ChannelRoleForm(BaseModel):
+    user_id: str
+    role: str = 'moderator'  # owner | moderator | leader
+    action: str = 'add'       # add | remove
+
+
+@router.post('/{id}/roles', response_model=bool)
+async def set_channel_role(id: str, form_data: ChannelRoleForm, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+    if form_data.role not in ('owner', 'moderator', 'leader'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='role must be owner, moderator, or leader')
+    if form_data.action not in ('add', 'remove'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='action must be add or remove')
+    await rc_sync_queue.enqueue('channel.role', {'channel_id': id, 'user_id': form_data.user_id, 'role': form_data.role, 'action': form_data.action})
+    return True
+
+
+class ChannelMemberRCForm(BaseModel):
+    user_id: str
+    action: str = 'add'  # add | remove
+
+
+@router.post('/{id}/rc/members', response_model=bool)
+async def set_channel_member_rc(id: str, form_data: ChannelMemberRCForm, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+    if form_data.action not in ('add', 'remove'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='action must be add or remove')
+    await rc_sync_queue.enqueue('channel.member', {'channel_id': id, 'user_id': form_data.user_id, 'action': form_data.action})
+    return True

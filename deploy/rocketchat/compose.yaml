@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # Rocket.Chat integration — optional Docker Compose package
 # ---------------------------------------------------------------------------
-# This file defines ONLY the Rocket.Chat-side services (MongoDB + Rocket.Chat).
-# It is meant to be layered on top of a host project's docker-compose.yaml:
+# This file defines the Rocket.Chat-side services (MongoDB + Rocket.Chat) and
+# wires open-webui to wait for them. Layer it on top of docker-compose.yaml:
 #
 #   docker compose \
 #     -f docker-compose.yaml \
@@ -10,9 +10,11 @@
 #     -f deploy/rocketchat/compose.open-webui.override.yaml \
 #     --profile rocketchat up -d
 #
-# Both services are gated behind the "rocketchat" Compose profile, so they only
-# start when --profile rocketchat (or COMPOSE_PROFILES=rocketchat) is set.
-# Without the profile, the host project's base services run untouched.
+# Both RC services are gated behind the "rocketchat" Compose profile, so they
+# only start when --profile rocketchat (or COMPOSE_PROFILES=rocketchat) is set.
+# The open-webui depends_on block below is therefore also only active when this
+# file is included with the profile — it is NOT present in the external-RC case
+# (where compose.open-webui.override.yaml is used alone).
 #
 # All values come from the environment / .env file — see .env.example.
 # No hardcoded hostnames, credentials, or :latest tags.
@@ -20,10 +22,20 @@
 
 services:
   # -------------------------------------------------------------------------
+  # Open WebUI — declare dependency on Rocket.Chat (bundled case only)
+  # This block is intentionally in compose.yaml (not the override) so that
+  # the external-RC path (override alone) does not add an undefined depends_on.
+  # -------------------------------------------------------------------------
+  open-webui:
+    depends_on:
+      rocketchat:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
   # MongoDB — required datastore for Rocket.Chat (replica set for oplog)
   # -------------------------------------------------------------------------
   mongodb:
-    image: mongo:${MONGO_TAG-7.0}
+    image: mongo:${MONGO_TAG-7.0.14}
     profiles: ["rocketchat"]
     restart: unless-stopped
     volumes:

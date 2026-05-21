@@ -22,30 +22,32 @@
     "smoke-test": "deploy/rocketchat/scripts/smoke-test.sh"
   },
   "backendFiles": {
-    "copy": [
-      "backend/open_webui/utils/rocketchat.py",
-      "backend/open_webui/utils/rocketchat_sync.py",
-      "backend/open_webui/utils/rocketchat_bridge.py",
-      "backend/open_webui/utils/rc_sync_queue.py",
-      "backend/open_webui/utils/ddp_client.py",
-      "backend/open_webui/routers/rocketchat_extras.py",
-      "backend/open_webui/routers/rocketchat_integrations.py",
-      "backend/open_webui/routers/oauth_server.py"
-    ],
-    "merge": [
-      "backend/open_webui/env.py",
-      "backend/open_webui/main.py",
-      "backend/open_webui/routers/auths.py",
-      "backend/open_webui/routers/users.py",
-      "backend/open_webui/routers/channels.py"
-    ]
+    "bundledSourceDir": "deploy/rocketchat/open-webui/backend",
+    "copy": {
+      "utils/rocketchat.py":           "backend/open_webui/utils/rocketchat.py",
+      "utils/rocketchat_sync.py":      "backend/open_webui/utils/rocketchat_sync.py",
+      "utils/rocketchat_bridge.py":    "backend/open_webui/utils/rocketchat_bridge.py",
+      "utils/rc_sync_queue.py":        "backend/open_webui/utils/rc_sync_queue.py",
+      "utils/ddp_client.py":           "backend/open_webui/utils/ddp_client.py",
+      "routers/rocketchat_extras.py":  "backend/open_webui/routers/rocketchat_extras.py",
+      "routers/rocketchat_integrations.py": "backend/open_webui/routers/rocketchat_integrations.py",
+      "routers/oauth_server.py":       "backend/open_webui/routers/oauth_server.py"
+    },
+    "mergeSnippets": {
+      "snippets/env.py.snippet":       "append to backend/open_webui/env.py",
+      "snippets/main.py.snippet":      "6 insertions in backend/open_webui/main.py",
+      "snippets/auths.py.snippet":     "2 insertions in backend/open_webui/routers/auths.py",
+      "snippets/users.py.snippet":     "imports + enqueues + endpoints in routers/users.py",
+      "snippets/channels.py.snippet":  "imports + enqueues + endpoints in routers/channels.py"
+    }
   },
   "frontendFiles": {
-    "copy": [
-      "src/lib/apis/rocketchat.ts",
-      "src/lib/utils/push.ts",
-      "src/routes/(app)/admin/rocketchat/+page.svelte"
-    ],
+    "bundledSourceDir": "deploy/rocketchat/open-webui/frontend",
+    "copy": {
+      "lib/apis/rocketchat.ts":            "src/lib/apis/rocketchat.ts",
+      "lib/utils/push.ts":                 "src/lib/utils/push.ts",
+      "routes/admin/rocketchat/+page.svelte": "src/routes/(app)/admin/rocketchat/+page.svelte"
+    },
     "merge": [
       "src/routes/+layout.svelte",
       "src/routes/(app)/admin/+layout.svelte",

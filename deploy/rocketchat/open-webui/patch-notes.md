@@ -3,10 +3,25 @@
 This is the precise, no-guesswork list of edits to make in a target Open WebUI
 (or Open WebUI-derived) codebase to wire in the Rocket.Chat integration.
 
-Each entry is one of:
-- **copy file** — drop the file in verbatim (see `backend-files.txt` / `frontend-files.txt`).
-- **add import** — add an import line.
-- **add block** — paste a code block at the indicated spot.
+## Package layout — actual source included
+
+All source files are included in this package (no "go find them in the repo"):
+
+```
+open-webui/
+  backend/utils/         # [COPY] backend utils — copy verbatim
+  backend/routers/       # [COPY] backend routers — copy verbatim
+  backend/snippets/      # [MERGE] exact code blocks with insertion instructions
+  frontend/lib/apis/     # [COPY] frontend API module — copy verbatim
+  frontend/lib/utils/    # [COPY] push notification util — copy verbatim
+  frontend/routes/       # [COPY] admin page — copy verbatim
+```
+
+See `backend-files.txt` and `frontend-files.txt` for the copy-to target paths.
+
+Each entry below is one of:
+- **copy file** — file lives in this package; copy it to the target path.
+- **apply snippet** — open `backend/snippets/<file>.snippet`, follow the insertion comment.
 - **add route** — register a router.
 
 All RC backend logic lives in the `[COPY]` files; the edits below are the thin

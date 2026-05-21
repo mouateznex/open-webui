@@ -1,12 +1,11 @@
 # ---------------------------------------------------------------------------
-# Rocket.Chat integration — Open WebUI service override
+# Rocket.Chat integration — Open WebUI environment override
 # ---------------------------------------------------------------------------
-# This override is layered ONTO the host project's `open-webui` service. It adds
-# only the Rocket.Chat-specific environment variables and the dependency on the
-# Rocket.Chat container — nothing else. The base open-webui service stays usable
-# without it.
+# This file adds ONLY the Rocket.Chat-specific environment variables to the
+# host project's `open-webui` service. It deliberately contains no depends_on
+# so it works identically for both bundled and external Rocket.Chat.
 #
-# Layer it explicitly:
+# Bundled RC (MongoDB + Rocket.Chat run as Docker services):
 #
 #   docker compose \
 #     -f docker-compose.yaml \
@@ -14,15 +13,20 @@
 #     -f deploy/rocketchat/compose.open-webui.override.yaml \
 #     --profile rocketchat up -d
 #
-# Because depends_on lives only here (not in the base compose), Open WebUI never
-# requires Rocket.Chat unless you opt in by including this file.
+#   compose.yaml handles depends_on: rocketchat for this case.
+#
+# External RC (Rocket.Chat runs elsewhere, already up):
+#
+#   docker compose \
+#     -f docker-compose.yaml \
+#     -f deploy/rocketchat/compose.open-webui.override.yaml \
+#     up -d
+#
+# Point ROCKETCHAT_INTERNAL_URL at your existing server's API endpoint.
 # ---------------------------------------------------------------------------
 
 services:
   open-webui:
-    depends_on:
-      rocketchat:
-        condition: service_healthy
     environment:
       # --- OAuth 2.0 / OIDC server (Open WebUI is the IdP for Rocket.Chat) -----
       - 'OAUTH_SERVER_CLIENT_ID=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
@@ -34,7 +38,8 @@ services:
       # Feature flag — "false" force-disables, "true" force-enables,
       # unset = auto-detect from credentials (default).
       - 'ROCKETCHAT_ENABLED=${ROCKETCHAT_ENABLED-true}'
-      # Container-to-container (internal) URL for backend REST + DDP calls.
+      # Container-to-container or private-network URL for backend REST + DDP calls.
+      # Bundled: http://rocketchat:3000 (default). External: your RC's API URL.
       - 'ROCKETCHAT_INTERNAL_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
       # Browser-facing (public) URL — used for deep-links shown to users.
       - 'ROCKETCHAT_BASE_URL=${ROCKETCHAT_BASE_URL:?ROCKETCHAT_BASE_URL must be set}'

@@ -1,21 +1,27 @@
 # Frontend files that make up the Rocket.Chat integration.
 #
-#   [COPY]  — new, RC-only files. Copy verbatim into the target tree.
-#   [MERGE] — existing Svelte components that gained a small RC-gated block,
-#             always guarded by {#if $config?.features?.rocketchat_enabled}.
-#             See patch-notes.md for the exact hook in each.
+#   [COPY]  — new, RC-only files. Copies live under frontend/ below this
+#             directory. Drop them verbatim into the target project tree.
+#   [MERGE] — existing Svelte/TS files that gained a small RC-gated block.
+#             All additions are wrapped in {#if $config?.features?.rocketchat_enabled}
+#             so they vanish cleanly when the integration is off. See patch-notes.md
+#             for the exact insertion point in each.
 #
 # Paths are relative to the repository root.
 
-# --- [COPY] new files — drop in as-is --------------------------------------
-[COPY] src/lib/apis/rocketchat.ts                          # API helpers: uploadFileToRC, uploadAudioToRC, admin/search/audit calls
-[COPY] src/lib/utils/push.ts                               # Web Push subscribe + RC push-token registration + notification routing
-[COPY] src/routes/(app)/admin/rocketchat/+page.svelte      # Admin -> Rocket.Chat settings/queue/audit page
+# --- [COPY] new files — drop in as-is, they are included here ---------------
+
+#  Source in THIS package                                       → Target path
+#  -----------------------------------------------------------------------
+[COPY] frontend/lib/apis/rocketchat.ts                         → src/lib/apis/rocketchat.ts
+[COPY] frontend/lib/utils/push.ts                              → src/lib/utils/push.ts
+[COPY] frontend/routes/admin/rocketchat/+page.svelte           → src/routes/(app)/admin/rocketchat/+page.svelte
 
 # --- [MERGE] existing files — add the RC-gated block (see patch-notes.md) ---
+
 [MERGE] src/routes/+layout.svelte                          # listen for 'rocketchat:notification' socket events
 [MERGE] src/routes/(app)/admin/+layout.svelte             # add "Rocket.Chat" link to the admin sidebar
-[MERGE] src/routes/(app)/search/+page.svelte              # render RC-augmented search results
+[MERGE] src/routes/(app)/search/+page.svelte              # render RC-augmented search results column
 [MERGE] src/lib/apis/users/index.ts                       # add setRocketChatUserActive() API helper
 [MERGE] src/lib/components/channel/MessageInput.svelte     # upload file/audio to RC; gate on rocketchat_enabled
 [MERGE] src/lib/components/channel/Messages/Message.svelte # URL preview via RC

@@ -24,39 +24,40 @@ hardcoded local URLs. This package matches that style.
 
 ## Phase 2 — Copy backend code
 
-Use `open-webui/backend-files.txt`. Copy every `[COPY]` file verbatim:
+The source files live in `deploy/rocketchat/open-webui/backend/`.
+Use `open-webui/backend-files.txt` for the exact source → target paths.
 
-- [ ] `backend/open_webui/utils/rocketchat.py`
-- [ ] `backend/open_webui/utils/rocketchat_sync.py`
-- [ ] `backend/open_webui/utils/rocketchat_bridge.py`
-- [ ] `backend/open_webui/utils/rc_sync_queue.py`
-- [ ] `backend/open_webui/utils/ddp_client.py`
-- [ ] `backend/open_webui/routers/rocketchat_extras.py`
-- [ ] `backend/open_webui/routers/rocketchat_integrations.py`
-- [ ] `backend/open_webui/routers/oauth_server.py`
+- [ ] Copy `backend/utils/rocketchat.py`            → `backend/open_webui/utils/`
+- [ ] Copy `backend/utils/rocketchat_sync.py`       → `backend/open_webui/utils/`
+- [ ] Copy `backend/utils/rocketchat_bridge.py`     → `backend/open_webui/utils/`
+- [ ] Copy `backend/utils/rc_sync_queue.py`         → `backend/open_webui/utils/`
+- [ ] Copy `backend/utils/ddp_client.py`            → `backend/open_webui/utils/`
+- [ ] Copy `backend/routers/rocketchat_extras.py`         → `backend/open_webui/routers/`
+- [ ] Copy `backend/routers/rocketchat_integrations.py`   → `backend/open_webui/routers/`
+- [ ] Copy `backend/routers/oauth_server.py`              → `backend/open_webui/routers/`
 
-## Phase 3 — Merge backend hooks
+## Phase 3 — Apply backend merge snippets
 
-Follow `open-webui/patch-notes.md` items 1–10 exactly:
+Snippet files live in `deploy/rocketchat/open-webui/backend/snippets/`.
+Each snippet's header says exactly where to insert it.
 
-- [ ] `env.py` — add the Rocket.Chat env block.
-- [ ] `main.py` — import env vars; import 3 routers; register 3 routers.
-- [ ] `main.py` — add OAuth client registry block.
-- [ ] `main.py` — add startup init + queue start + bridge retry.
-- [ ] `main.py` — add `/api/config` feature flags (`rocketchat_enabled`, `rocketchat_base_url`).
-- [ ] `routers/auths.py` — enqueue `user.profile`.
-- [ ] `routers/users.py` — enqueue user mutations + copy RC admin endpoints.
-- [ ] `routers/channels.py` — enqueue channel mutations + bridge forwarding + RC search.
+- [ ] Apply `backend/snippets/env.py.snippet`      — append at end of `env.py`
+- [ ] Apply `backend/snippets/main.py.snippet`     — 6 insertion points in `main.py`
+- [ ] Apply `backend/snippets/auths.py.snippet`    — 2 insertions in `routers/auths.py`
+- [ ] Apply `backend/snippets/users.py.snippet`    — imports + enqueues + new endpoints in `users.py`
+- [ ] Apply `backend/snippets/channels.py.snippet` — imports + enqueues + search + new endpoints in `channels.py`
 
 ## Phase 4 — Copy + merge frontend code
 
-Use `open-webui/frontend-files.txt` and `patch-notes.md` items 11–17:
+Frontend source lives in `deploy/rocketchat/open-webui/frontend/`.
+Use `open-webui/frontend-files.txt` for the exact source → target paths.
 
-- [ ] Copy `src/lib/apis/rocketchat.ts`, `src/lib/utils/push.ts`,
-      `src/routes/(app)/admin/rocketchat/+page.svelte`.
-- [ ] Merge the `{#if $config?.features?.rocketchat_enabled}` blocks into the
-      listed components (admin layout, root layout, search, MessageInput, Message,
-      Navbar, HighlightsModal, URLPreview, UserList, Settings/General, users API).
+- [ ] Copy `frontend/lib/apis/rocketchat.ts`           → `src/lib/apis/rocketchat.ts`
+- [ ] Copy `frontend/lib/utils/push.ts`                → `src/lib/utils/push.ts`
+- [ ] Copy `frontend/routes/admin/rocketchat/+page.svelte` → `src/routes/(app)/admin/rocketchat/+page.svelte`
+- [ ] Merge the `{#if $config?.features?.rocketchat_enabled}` blocks (see patch-notes.md items 14–17)
+      into: admin layout, root layout, search page, MessageInput, Message, Navbar,
+      HighlightsModal, URLPreview, UserList, Settings/General, users API.
 
 ## Phase 5 — Configure environment
 

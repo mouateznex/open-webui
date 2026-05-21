@@ -1,0 +1,118 @@
+# =============================================================================
+# SNIPPET: add to backend/open_webui/main.py  — four insertion points
+# =============================================================================
+
+# --- INSERTION 1 ---
+# WHERE: top of file, inside the `from open_webui.routers import (...)` block
+# ADD these imports alongside the other router imports:
+
+    oauth_server,
+    rocketchat_integrations,
+    rocketchat_extras,
+
+# --- INSERTION 2 ---
+# WHERE: inside the large `from open_webui.env import (...)` block
+# ADD these alongside the other env imports:
+
+    OAUTH_SERVER_CLIENT_ID,
+    OAUTH_SERVER_CLIENT_SECRET,
+    OAUTH_SERVER_REDIRECT_URIS,
+    # Rocket.Chat Integration
+    ROCKETCHAT_ENABLED,
+    ROCKETCHAT_URL,
+    ROCKETCHAT_INTERNAL_URL,
+    ROCKETCHAT_BASE_URL,
+    ROCKETCHAT_ADMIN_USER,
+    ROCKETCHAT_ADMIN_PASSWORD,
+    ROCKETCHAT_SLASH_TOKEN,
+    ROCKETCHAT_SLASH_MODEL,
+    VAPID_PUBLIC_KEY,
+    JITSI_URL,
+    MATRIX_HOMESERVER_DOMAIN,
+
+# --- INSERTION 3 ---
+# WHERE: near app-state setup (after `app = FastAPI(...)` or similar).
+#        Search for where app.state is first configured.
+# ADD this block:
+
+app.state.oauth_server_clients = {}
+if OAUTH_SERVER_CLIENT_ID and OAUTH_SERVER_CLIENT_SECRET:
+    _redirect_uris = [u.strip() for u in OAUTH_SERVER_REDIRECT_URIS.split(',') if u.strip()]
+    app.state.oauth_server_clients[OAUTH_SERVER_CLIENT_ID] = {
+        'client_secret': OAUTH_SERVER_CLIENT_SECRET,
+        'redirect_uris': _redirect_uris,
+    }
+
+# --- INSERTION 4 ---
+# WHERE: router registration block (where app.include_router(...) calls live)
+# ADD these three registrations:
+
+app.include_router(oauth_server.router, tags=['oauth-server'])
+app.include_router(rocketchat_integrations.router, tags=['rocketchat'])
+app.include_router(rocketchat_extras.router, prefix='/api/v1', tags=['rocketchat-extras'])
+
+# --- INSERTION 5 ---
+# WHERE: inside the lifespan startup coroutine, after database init
+# ADD this block (initialises the RC client, queue, and real-time bridge):
+
+    # Rocket.Chat integration — initialise the shared API client if configured.
+    # ROCKETCHAT_ENABLED controls activation:
+    #   True  → always enable (raise at startup if credentials are missing)
+    #   False → always disable
+    #   None  → auto-detect: enable when ROCKETCHAT_INTERNAL_URL + credentials are set
+    from open_webui.utils import rocketchat as rc
+    _rc_should_init = (
+        ROCKETCHAT_ENABLED is True
+        or (ROCKETCHAT_ENABLED is None and bool(
+            ROCKETCHAT_INTERNAL_URL and ROCKETCHAT_ADMIN_USER and ROCKETCHAT_ADMIN_PASSWORD
+        ))
+    )
+    if _rc_should_init:
+        rc.init(ROCKETCHAT_INTERNAL_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
+
+    # Persistent sync queue — reads pending jobs off disk and starts retrying.
+    # Importing rocketchat_sync side-effect-registers all handlers with the queue.
+    from open_webui.utils import rocketchat_sync as _rc_sync_handlers  # noqa: F401
+    from open_webui.utils import rc_sync_queue
+    await rc_sync_queue.start()
+
+    # Rocket.Chat real-time bridge — DDP WebSocket connection with retry/backoff
+    from open_webui.utils.rocketchat_bridge import get_bridge
+    if rc.is_configured():
+        async def _start_bridge_with_retry():
+            bridge = get_bridge()
+            delay = 2
+            for attempt in range(8):
+                if bridge._running:
+                    return
+                try:
+                    await bridge.start(
+                        ROCKETCHAT_INTERNAL_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD
+                    )
+                except Exception as exc:
+                    log.warning('Bridge start error (attempt %d/8): %s', attempt + 1, exc)
+                if bridge._running:
+                    return
+                log.info(
+                    'Rocket.Chat bridge not ready (attempt %d/8); retrying in %ds',
+                    attempt + 1, delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60)
+            log.error('Rocket.Chat real-time bridge failed to connect after 8 attempts')
+
+        asyncio.create_task(_start_bridge_with_retry())
+
+# --- INSERTION 6 ---
+# WHERE: inside get_app_config() — the `features` dict in the return statement
+# ADD these entries (add `from open_webui.utils import rocketchat as rc` at the
+# top of the function body first):
+
+    from open_webui.utils import rocketchat as rc  # local import — avoids circular at module level
+    # ... (in the features dict):
+    'rocketchat_enabled': rc.is_configured(),
+    'rocketchat_base_url': ROCKETCHAT_BASE_URL or None,
+    'rocketchat_slash_enabled': bool(ROCKETCHAT_SLASH_TOKEN),
+    'jitsi_url': JITSI_URL,
+    'web_push_vapid_public_key': VAPID_PUBLIC_KEY or None,
+    'matrix_homeserver_domain': MATRIX_HOMESERVER_DOMAIN,
