@@ -749,12 +749,32 @@ async def lifespan(app: FastAPI):
     from open_webui.utils import rocketchat as rc
     rc.init(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
 
-    # Rocket.Chat real-time bridge — DDP WebSocket connection
+    # Rocket.Chat real-time bridge — DDP WebSocket connection with retry/backoff
     from open_webui.utils.rocketchat_bridge import get_bridge
     if rc.is_configured():
-        asyncio.create_task(
-            get_bridge().start(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
-        )
+        async def _start_bridge_with_retry():
+            bridge = get_bridge()
+            delay = 2
+            for attempt in range(8):
+                if bridge._running:
+                    return
+                try:
+                    await bridge.start(
+                        ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD
+                    )
+                except Exception as exc:
+                    log.warning('Bridge start error (attempt %d/8): %s', attempt + 1, exc)
+                if bridge._running:
+                    return
+                log.info(
+                    'Rocket.Chat bridge not ready (attempt %d/8); retrying in %ds',
+                    attempt + 1, delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60)
+            log.error('Rocket.Chat real-time bridge failed to connect after 8 attempts')
+
+        asyncio.create_task(_start_bridge_with_retry())
 
     # Mark application as ready to accept traffic from a startup perspective.
     app.state.startup_complete = True

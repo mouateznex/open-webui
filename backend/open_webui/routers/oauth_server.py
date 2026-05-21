@@ -6,11 +6,12 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import asyncio
+import jwt as _pyjwt
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from open_webui.env import REDIS_KEY_PREFIX
+from open_webui.env import REDIS_KEY_PREFIX, WEBUI_SECRET_KEY
 from open_webui.models.users import Users
 from open_webui.utils.auth import create_token, decode_token
 
@@ -116,6 +117,7 @@ async def authorize(
     response_type: str = 'code',
     state: Optional[str] = None,
     scope: Optional[str] = 'openid',
+    nonce: Optional[str] = None,
 ):
     if response_type != 'code':
         raise HTTPException(status_code=400, detail='Only response_type=code is supported')
@@ -131,8 +133,8 @@ async def authorize(
         if data and 'id' in data:
             user = await Users.get_user_by_id(data['id'])
 
-    # Pending users are not allowed through
-    if user is None or user.role == 'pending':
+    # Unauthenticated: redirect to login, preserving all OAuth params
+    if user is None:
         params = urlencode({
             k: v for k, v in {
                 'client_id': client_id,
@@ -140,16 +142,19 @@ async def authorize(
                 'response_type': response_type,
                 'state': state or '',
                 'scope': scope or 'openid',
+                'nonce': nonce or '',
             }.items() if v
         })
-        # Redirect to Open WebUI login; after login the frontend will
-        # follow the `redirect` param back to this endpoint.
         # The whole inner URL (path + query) MUST be URL-encoded as a single
         # value, otherwise its `?`/`&` separators leak into /auth's own query
         # string and the inner client_id/redirect_uri/state params are lost.
         inner_url = f'/oauth/authorize?{params}'
         login_query = urlencode({'redirect': inner_url})
         return RedirectResponse(url=f'/auth?{login_query}')
+
+    # Pending accounts are not allowed through — redirect would cause a loop
+    if user.role == 'pending':
+        raise HTTPException(status_code=403, detail='Account pending approval')
 
     # Issue a single-use authorization code
     code = secrets.token_urlsafe(32)
@@ -158,6 +163,7 @@ async def authorize(
         'client_id': client_id,
         'redirect_uri': redirect_uri,
         'scope': scope or 'openid',
+        'nonce': nonce,
         'expires_at': int(time.time()) + _CODE_TTL,
     })
 
@@ -195,16 +201,40 @@ async def token(
         raise HTTPException(status_code=400, detail='Code was not issued for this client')
 
     from datetime import timedelta
+    # Embed aud/client_id so /oauth/userinfo can reject plain session tokens
     access_token = create_token(
-        {'id': payload['user_id'], 'scope': payload['scope']},
+        {
+            'id': payload['user_id'],
+            'scope': payload['scope'],
+            'aud': 'oauth',
+            'client_id': client_id,
+        },
         expires_delta=timedelta(seconds=_TOKEN_TTL),
     )
+
+    # Build OIDC id_token (HS256-signed JWT with required claims)
+    user = await Users.get_user_by_id(payload['user_id'])
+    base = str(request.app.state.config.WEBUI_URL).rstrip('/')
+    now = int(time.time())
+    id_token_claims: dict = {
+        'iss': base,
+        'sub': payload['user_id'],
+        'aud': client_id,
+        'iat': now,
+        'exp': now + _TOKEN_TTL,
+        'email': user.email if user else '',
+        'name': user.name if user else '',
+    }
+    if payload.get('nonce'):
+        id_token_claims['nonce'] = payload['nonce']
+    id_token = _pyjwt.encode(id_token_claims, WEBUI_SECRET_KEY, algorithm='HS256')
 
     return JSONResponse({
         'access_token': access_token,
         'token_type': 'Bearer',
         'expires_in': _TOKEN_TTL,
         'scope': payload['scope'],
+        'id_token': id_token,
     })
 
 
@@ -222,6 +252,15 @@ async def userinfo(request: Request):
     data = decode_token(auth_header[len('Bearer '):])
     if not data or 'id' not in data:
         raise HTTPException(status_code=401, detail='Invalid token')
+
+    # Reject plain session tokens — only OAuth access tokens (aud='oauth') are valid here
+    if data.get('aud') != 'oauth':
+        raise HTTPException(status_code=401, detail='Token is not an OAuth access token')
+
+    # Verify the token carries the openid scope
+    scope = data.get('scope', '')
+    if 'openid' not in scope.split():
+        raise HTTPException(status_code=403, detail='Token scope does not include openid')
 
     user = await Users.get_user_by_id(data['id'])
     if not user:

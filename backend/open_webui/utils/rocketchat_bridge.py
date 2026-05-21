@@ -292,10 +292,8 @@ class RocketChatBridge:
         """
         Forward an Open WebUI message to Rocket.Chat.
         The ow_origin custom field prevents the DDP echo from being re-stored.
+        Uses the REST API — independent of whether the DDP bridge is running.
         """
-        if not self._running:
-            return
-
         from open_webui.models.channels import Channels
         from open_webui.utils.rocketchat import get_client, is_configured
 

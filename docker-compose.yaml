@@ -17,24 +17,26 @@ services:
     volumes:
       - open-webui:/app/backend/data
     depends_on:
-      - ollama
-      - rocketchat
+      ollama:
+        condition: service_started
+      rocketchat:
+        condition: service_healthy
     ports:
       - ${OPEN_WEBUI_PORT-3000}:8080
     environment:
       - 'OLLAMA_BASE_URL=http://ollama:11434'
-      - 'WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY-change-me-in-production}'
+      - 'WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set in environment or .env}'
       # Public URL Open WebUI is reachable at (used in OIDC discovery document)
       - 'WEBUI_URL=${WEBUI_URL-http://localhost:3000}'
       # OAuth Server — credentials Rocket.Chat uses to authenticate against Open WebUI
       - 'OAUTH_SERVER_CLIENT_ID=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
-      - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET-change-me-in-production}'
+      - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET:?OAUTH_SERVER_CLIENT_SECRET must be set in environment or .env}'
       # Must match the callback URL configured in Rocket.Chat's Custom OAuth settings
       - 'OAUTH_SERVER_REDIRECT_URIS=${OAUTH_SERVER_REDIRECT_URIS-http://localhost:3100/_oauth/openwebui}'
       # Rocket.Chat API client — internal service-to-service URL and admin credentials
       - 'ROCKETCHAT_URL=http://rocketchat:3000'
       - 'ROCKETCHAT_ADMIN_USER=${ROCKETCHAT_ADMIN_USER-rc_admin}'
-      - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD-change-me-in-production}'
+      - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD:?ROCKETCHAT_ADMIN_PASSWORD must be set in environment or .env}'
       # Rocket.Chat outgoing webhook token for /rocketchat/slash (AI slash commands)
       - 'ROCKETCHAT_SLASH_TOKEN=${ROCKETCHAT_SLASH_TOKEN-}'
       - 'ROCKETCHAT_SLASH_MODEL=${ROCKETCHAT_SLASH_MODEL-}'
@@ -77,6 +79,12 @@ services:
         condition: service_healthy
     ports:
       - ${ROCKETCHAT_PORT-3100}:3000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/info || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 90s
     environment:
       - 'MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0'
       - 'MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0'
@@ -90,7 +98,7 @@ services:
       # authenticate against the Rocket.Chat REST + DDP APIs, otherwise the
       # integration cannot log in. ADMIN_EMAIL must not collide with a real user.
       - 'ADMIN_USERNAME=${ROCKETCHAT_ADMIN_USER-rc_admin}'
-      - 'ADMIN_PASS=${ROCKETCHAT_ADMIN_PASSWORD-change-me-in-production}'
+      - 'ADMIN_PASS=${ROCKETCHAT_ADMIN_PASSWORD:?ROCKETCHAT_ADMIN_PASSWORD must be set in environment or .env}'
       - 'ADMIN_EMAIL=${ROCKETCHAT_ADMIN_EMAIL-rc-admin@example.com}'
       # Skip the interactive setup wizard so the server is API-ready immediately.
       - 'OVERWRITE_SETTING_Show_Setup_Wizard=completed'
@@ -120,7 +128,7 @@ services:
       - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-identity_token_sent_via=header'
       - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-scope=openid'
       - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-id=${OAUTH_SERVER_CLIENT_ID-rocketchat}'
-      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-secret=${OAUTH_SERVER_CLIENT_SECRET-change-me-in-production}'
+      - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-secret=${OAUTH_SERVER_CLIENT_SECRET:?OAUTH_SERVER_CLIENT_SECRET must be set in environment or .env}'
       - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-login_style=redirect'
       - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-button_label_text=Sign in with Open WebUI'
       - 'OVERWRITE_SETTING_Accounts_OAuth_Custom-OpenWebUI-username_field=name'
