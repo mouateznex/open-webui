@@ -40,6 +40,8 @@ services:
       - 'ROCKETCHAT_SLASH_MODEL=${ROCKETCHAT_SLASH_MODEL-}'
       # Jitsi video call server (empty = feature disabled)
       - 'JITSI_URL=${JITSI_URL-}'
+      # Matrix federation — domain RC uses as its Matrix homeserver (empty = disabled)
+      - 'MATRIX_HOMESERVER_DOMAIN=${MATRIX_HOMESERVER_DOMAIN-}'
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
@@ -84,6 +86,10 @@ services:
       # Disable Rocket.Chat's own registration/login — Open WebUI is the only IdP
       - 'OVERWRITE_SETTING_Accounts_RegistrationForm=Disabled'
       - 'OVERWRITE_SETTING_Accounts_ShowFormLogin=false'
+      # Matrix federation (RC ≥ 5.0 built-in bridge; set MATRIX_HOMESERVER_DOMAIN to activate)
+      - 'OVERWRITE_SETTING_Feature_Federation_Enabled=${MATRIX_HOMESERVER_DOMAIN:+true}'
+      - 'OVERWRITE_SETTING_Feature_Federation_Matrix_Enabled=${MATRIX_HOMESERVER_DOMAIN:+true}'
+      - 'OVERWRITE_SETTING_Feature_Federation_Domain=${MATRIX_HOMESERVER_DOMAIN-}'
 
 volumes:
   ollama: {}

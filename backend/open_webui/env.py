@@ -1092,3 +1092,8 @@ ROCKETCHAT_SLASH_MODEL = os.environ.get('ROCKETCHAT_SLASH_MODEL', '')
 # Set to any Jitsi-compatible server URL (e.g. https://meet.jit.si) to enable
 # the "Start Video Call" button in channel navbars.
 JITSI_URL = os.environ.get('JITSI_URL', '')
+
+# Matrix federation — the public domain Rocket.Chat uses as its Matrix homeserver.
+# Example: chat.example.com  (RC exposes @user:chat.example.com and #room:chat.example.com)
+# Leave empty to disable the federation info UI in Open WebUI.
+MATRIX_HOMESERVER_DOMAIN = os.environ.get('MATRIX_HOMESERVER_DOMAIN', '')

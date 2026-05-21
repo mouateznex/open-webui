@@ -268,6 +268,30 @@ class RocketChatClient:
         return True
 
     # ------------------------------------------------------------------
+    # Matrix Federation
+    # ------------------------------------------------------------------
+
+    async def is_matrix_federation_enabled(self) -> bool:
+        """Return True if RC's Matrix federation feature is enabled."""
+        try:
+            body = await self._get('settings/Feature_Federation_Matrix_Enabled')
+            return bool(body.get('value'))
+        except RocketChatError:
+            return False
+
+    async def get_federation_room_peers(self, room_id: str) -> list:
+        """
+        Return federated peer addresses for a room, e.g. ['#general:example.com'].
+        Returns an empty list if federation is off or the room is not federated.
+        """
+        try:
+            body = await self._get('rooms.info', {'roomId': room_id})
+            room = body.get('room', {})
+            return room.get('federatedPeers', [])
+        except RocketChatError:
+            return []
+
+    # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
 

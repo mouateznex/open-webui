@@ -831,6 +831,57 @@ async def search_channel_messages(
 
 
 ############################
+# FederationInfo
+############################
+
+
+@router.get('/{id}/federation-info')
+async def get_channel_federation_info(
+    id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Return Matrix federation details for a channel.
+    Requires MATRIX_HOMESERVER_DOMAIN to be set.
+    The computed alias follows RC's convention: #{rc_room_name}:{domain}
+    """
+    from open_webui.env import MATRIX_HOMESERVER_DOMAIN
+    from open_webui.utils.rocketchat import is_configured, get_client
+    from open_webui.utils.rocketchat_sync import _rc_channel_name
+
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    if channel.type == 'dm':
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='DM channels are not federated')
+
+    room_id = (channel.data or {}).get('rocketchat_room_id')
+    rc_channel_name = _rc_channel_name(channel.name)
+    matrix_alias = None
+    federation_active = False
+
+    if MATRIX_HOMESERVER_DOMAIN:
+        matrix_alias = f'#{rc_channel_name}:{MATRIX_HOMESERVER_DOMAIN}'
+        if is_configured() and room_id:
+            try:
+                federation_active = await get_client().is_matrix_federation_enabled()
+            except Exception:
+                pass
+
+    return {
+        'channel_id': id,
+        'rc_room_id': room_id,
+        'rc_channel_name': rc_channel_name,
+        'matrix_homeserver_domain': MATRIX_HOMESERVER_DOMAIN or None,
+        'matrix_room_alias': matrix_alias,
+        'matrix_user_id_format': f'@username:{MATRIX_HOMESERVER_DOMAIN}' if MATRIX_HOMESERVER_DOMAIN else None,
+        'federation_active': federation_active,
+    }
+
+
+############################
 # GetPinnedChannelMessages
 ############################
 

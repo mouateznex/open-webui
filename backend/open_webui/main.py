@@ -546,6 +546,7 @@ from open_webui.env import (
     ROCKETCHAT_SLASH_TOKEN,
     ROCKETCHAT_SLASH_MODEL,
     JITSI_URL,
+    MATRIX_HOMESERVER_DOMAIN,
 )
 
 
@@ -2313,6 +2314,7 @@ async def get_app_config(request: Request):
                     'rocketchat_enabled': bool(ROCKETCHAT_URL and ROCKETCHAT_ADMIN_USER and ROCKETCHAT_ADMIN_PASSWORD),
                     'rocketchat_slash_enabled': bool(ROCKETCHAT_SLASH_TOKEN),
                     'jitsi_url': JITSI_URL,
+                    'matrix_homeserver_domain': MATRIX_HOMESERVER_DOMAIN,
                     'enable_google_drive_integration': app.state.config.ENABLE_GOOGLE_DRIVE_INTEGRATION,
                     'enable_onedrive_integration': app.state.config.ENABLE_ONEDRIVE_INTEGRATION,
                     'enable_memories': app.state.config.ENABLE_MEMORIES,
