@@ -64,6 +64,7 @@ from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_permission, filter_allowed_access_grants
 from open_webui.utils import rocketchat_sync as rc_sync
+from open_webui.utils import rc_sync_queue
 from open_webui.utils.rocketchat_bridge import get_bridge as _rc_bridge
 from open_webui.utils.webhook import post_webhook
 from open_webui.utils.channels import extract_mentions, replace_mentions
@@ -279,6 +280,9 @@ async def get_dm_channel_by_user_id(
             )
             await enter_room_for_users(f'channel:{channel.id}', participant_ids)
 
+            # Provision the matching DM room in Rocket.Chat (Phase 3.3).
+            await rc_sync_queue.enqueue('dm.create', {'channel_id': channel.id})
+
             return ChannelModel(**channel.model_dump())
         else:
             raise Exception('Error creating channel')
@@ -345,7 +349,7 @@ async def create_new_channel(
             )
             await enter_room_for_users(f'channel:{channel.id}', participant_ids)
 
-            asyncio.create_task(rc_sync.sync_channel_create(channel))
+            await rc_sync_queue.enqueue('channel.create', {'channel_id': channel.id})
             return ChannelModel(**channel.model_dump())
         else:
             raise Exception('Error creating channel')
@@ -659,7 +663,10 @@ async def update_channel_by_id(
 
     try:
         channel = await Channels.update_channel_by_id(id, form_data, db=db)
-        asyncio.create_task(rc_sync.sync_channel_update(channel, old_name=old_name))
+        await rc_sync_queue.enqueue('channel.update', {
+            'channel_id': channel.id,
+            'old_name': old_name,
+        })
         return ChannelModel(**channel.model_dump())
     except Exception as e:
         log.exception(e)
@@ -691,7 +698,13 @@ async def delete_channel_by_id(
         channel_snapshot = await Channels.get_channel_by_id(id, db=db)
         await Channels.delete_channel_by_id(id, db=db)
         if channel_snapshot:
-            asyncio.create_task(rc_sync.sync_channel_delete(channel_snapshot))
+            # The OW row is gone — snapshot everything the queue handler will need.
+            data = channel_snapshot.data or {}
+            await rc_sync_queue.enqueue('channel.delete', {
+                'rc_room_id': data.get('rocketchat_room_id'),
+                'private': channel_snapshot.type == 'group' or bool(getattr(channel_snapshot, 'is_private', False)),
+                'name': channel_snapshot.name,
+            })
         return True
     except Exception as e:
         log.exception(e)
@@ -802,20 +815,92 @@ async def search_channel_messages(
     if not q or not q.strip():
         return []
 
-    message_list = await Messages.search_messages_by_channel_ids([id], q.strip(), limit=min(limit, 100), db=db)
-    if not message_list:
-        return []
+    query = q.strip()
 
-    user_ids = list(set(m.user_id for m in message_list))
+    # If this OW channel is bridged to a Rocket.Chat room, search via RC's
+    # chat.search endpoint (Phase 7.1). Falls back to the local message table
+    # when RC is not configured or the channel was never synced.
+    rc_messages: list = []
+    rc_room_id = (channel.data or {}).get('rocketchat_room_id') if channel.data else None
+    try:
+        from open_webui.utils.rocketchat import is_configured, get_client
+        if rc_room_id and is_configured():
+            rc_messages = await get_client().search_messages(rc_room_id, query, count=min(limit, 100))
+    except Exception as exc:
+        log.warning('RC chat.search failed for channel %s: %s', channel.id, exc)
+        rc_messages = []
+
+    # Always include local hits — the OW DB carries non-RC fields like
+    # parent_id/replies and webhook-authored messages that may not exist in RC.
+    local_messages = await Messages.search_messages_by_channel_ids([id], query, limit=min(limit, 100), db=db)
+
+    # Merge: RC hits first (full-text scored), then any local hits whose IDs
+    # weren't already returned. We map RC messages onto the same
+    # MessageUserResponse shape so the frontend doesn't need a second code path.
+    seen_rc_ids: set = set()
+    merged: list = []
+
+    for m in local_messages:
+        seen_rc_ids.add((m.data or {}).get('rocketchat_message_id'))
+
+    user_ids = list({m.user_id for m in local_messages})
     fetched_users = {u.id: u for u in await Users.get_users_by_user_ids(user_ids, db=db)}
 
-    results = []
-    for message in message_list:
+    # Try to resolve RC senders to OW users by email/username
+    def _rc_ts_to_owui(ts):
+        # RC returns either ISO 8601 strings ("2024-01-01T00:00:00.000Z") or
+        # extended JSON objects ({"$date": <ms>}). OW stores time_ns. We
+        # normalise everything to ns.
+        try:
+            if isinstance(ts, dict):
+                ms = ts.get('$date') or ts.get('date') or 0
+                return int(float(ms)) * 1_000_000
+            if isinstance(ts, str):
+                from datetime import datetime
+                t = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                return int(t.timestamp() * 1e9)
+            if isinstance(ts, (int, float)):
+                return int(ts) * 1_000_000
+        except Exception:
+            return 0
+        return 0
+
+    for rc_msg in rc_messages:
+        if rc_msg.get('_id') and rc_msg.get('_id') in seen_rc_ids:
+            continue
+        author = rc_msg.get('u') or {}
+        emails = author.get('emails') or []
+        owui_user = None
+        for em in emails:
+            address = em.get('address') if isinstance(em, dict) else None
+            if address:
+                owui_user = await Users.get_user_by_email(address, db=db)
+                if owui_user:
+                    break
+        merged.append(
+            MessageUserResponse(
+                id=rc_msg.get('_id', ''),
+                channel_id=channel.id,
+                user_id=owui_user.id if owui_user else (author.get('_id') or ''),
+                content=rc_msg.get('msg', ''),
+                data={'rocketchat_message_id': rc_msg.get('_id'), 'rocketchat_room_id': rc_room_id},
+                meta={'rocketchat': True},
+                parent_id=rc_msg.get('tmid'),
+                created_at=_rc_ts_to_owui(rc_msg.get('ts')),
+                updated_at=_rc_ts_to_owui(rc_msg.get('_updatedAt') or rc_msg.get('ts')),
+                reply_count=0,
+                latest_reply_at=None,
+                reactions=[],
+                user=UserNameResponse(**owui_user.model_dump()) if owui_user else None,
+            )
+        )
+
+    for message in local_messages:
         user_info = message.user
         if user_info is None and message.user_id in fetched_users:
             user_info = UserNameResponse(**fetched_users[message.user_id].model_dump())
 
-        results.append(
+        merged.append(
             MessageUserResponse(
                 **{
                     **message.model_dump(),
@@ -827,7 +912,7 @@ async def search_channel_messages(
             )
         )
 
-    return results
+    return merged[:limit]
 
 
 ############################
@@ -843,8 +928,15 @@ async def get_channel_federation_info(
 ):
     """
     Return Matrix federation details for a channel.
-    Requires MATRIX_HOMESERVER_DOMAIN to be set.
-    The computed alias follows RC's convention: #{rc_room_name}:{domain}
+
+    Unlike the previous version which simply *fabricated* an alias from
+    MATRIX_HOMESERVER_DOMAIN + the channel name, this implementation:
+
+      1. Reads the *actual* federated peer list and aliases from
+         Rocket.Chat's `rooms.info` endpoint, so externally bridged room
+         IDs (#room:foreign-server.tld) are surfaced as they really are.
+      2. Cross-checks RC's `Feature_Federation_Matrix_Enabled` setting.
+      3. Falls back to a derived alias only as a hint when no peers exist.
     """
     from open_webui.env import MATRIX_HOMESERVER_DOMAIN
     from open_webui.utils.rocketchat import is_configured, get_client
@@ -859,26 +951,354 @@ async def get_channel_federation_info(
 
     room_id = (channel.data or {}).get('rocketchat_room_id')
     rc_channel_name = _rc_channel_name(channel.name)
-    matrix_alias = None
-    federation_active = False
 
-    if MATRIX_HOMESERVER_DOMAIN:
-        matrix_alias = f'#{rc_channel_name}:{MATRIX_HOMESERVER_DOMAIN}'
-        if is_configured() and room_id:
+    federation_active = False
+    federated_peers: list = []
+    federated_aliases: list = []
+    rc_room: dict = {}
+
+    if is_configured():
+        rc = get_client()
+        try:
+            federation_active = await rc.is_matrix_federation_enabled()
+        except Exception as e:
+            log.debug('federation flag read failed: %s', e)
+
+        if room_id:
             try:
-                federation_active = await get_client().is_matrix_federation_enabled()
-            except Exception:
-                pass
+                rc_room = await rc.get_room_info(room_id) or {}
+                federated_peers = (
+                    rc_room.get('federatedPeers')
+                    or rc_room.get('federation', {}).get('peers')
+                    or []
+                )
+                # RC stores Matrix aliases in different shapes across versions
+                aliases = (
+                    rc_room.get('aliases')
+                    or rc_room.get('federation', {}).get('aliases')
+                    or []
+                )
+                if isinstance(aliases, str):
+                    federated_aliases = [aliases]
+                elif isinstance(aliases, list):
+                    federated_aliases = [a for a in aliases if isinstance(a, str)]
+            except Exception as e:
+                log.debug('rooms.info failed for room %s: %s', room_id, e)
+
+    # Derived alias is only a hint — it may not actually be registered with RC.
+    derived_alias = (
+        f'#{rc_channel_name}:{MATRIX_HOMESERVER_DOMAIN}'
+        if MATRIX_HOMESERVER_DOMAIN else None
+    )
+
+    # Real, registered alias (if RC has actually advertised one).
+    primary_alias: Optional[str] = None
+    for a in federated_aliases:
+        if isinstance(a, str) and a.startswith('#'):
+            primary_alias = a
+            break
+    if not primary_alias:
+        primary_alias = derived_alias
 
     return {
         'channel_id': id,
         'rc_room_id': room_id,
         'rc_channel_name': rc_channel_name,
         'matrix_homeserver_domain': MATRIX_HOMESERVER_DOMAIN or None,
-        'matrix_room_alias': matrix_alias,
+        'matrix_room_alias': primary_alias,
         'matrix_user_id_format': f'@username:{MATRIX_HOMESERVER_DOMAIN}' if MATRIX_HOMESERVER_DOMAIN else None,
         'federation_active': federation_active,
+        'federated_peers': federated_peers,
+        'federated_aliases': federated_aliases,
+        'is_remote_room': bool(rc_room.get('federated')) and not rc_room.get('owner'),
     }
+
+
+############################
+# Federated room list (cross-server)
+############################
+
+
+@router.get('/federation/rooms')
+async def list_federation_rooms(user=Depends(get_verified_user)):
+    """
+    Return the list of federated rooms known to Rocket.Chat — both the rooms
+    this server hosts AND the remote-bridged ones (#room:other.example.com).
+    Returns an empty list if RC is not configured or federation is disabled.
+    """
+    from open_webui.utils.rocketchat import is_configured, get_client
+
+    if not is_configured():
+        return {'enabled': False, 'rooms': [], 'servers': []}
+
+    rc = get_client()
+    enabled = await rc.is_matrix_federation_enabled()
+    if not enabled:
+        return {'enabled': False, 'rooms': [], 'servers': []}
+
+    rooms = await rc.list_federation_rooms()
+    servers = await rc.list_federation_servers()
+    return {'enabled': True, 'rooms': rooms, 'servers': servers}
+
+
+############################
+# Channel feature endpoints (Phase 3.2 — RC-backed)
+############################
+
+
+class ChannelTopicForm(BaseModel):
+    topic: str = ''
+
+
+@router.post('/{id}/topic', response_model=bool)
+async def set_channel_topic(
+    id: str,
+    form_data: ChannelTopicForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    await rc_sync_queue.enqueue('channel.topic', {'channel_id': id, 'topic': form_data.topic})
+    return True
+
+
+class ChannelAnnouncementForm(BaseModel):
+    announcement: str = ''
+
+
+@router.post('/{id}/announcement', response_model=bool)
+async def set_channel_announcement(
+    id: str,
+    form_data: ChannelAnnouncementForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    await rc_sync_queue.enqueue('channel.announcement', {
+        'channel_id': id, 'announcement': form_data.announcement,
+    })
+    return True
+
+
+class ChannelReadOnlyForm(BaseModel):
+    read_only: bool
+
+
+@router.post('/{id}/read-only', response_model=bool)
+async def set_channel_read_only(
+    id: str,
+    form_data: ChannelReadOnlyForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    await rc_sync_queue.enqueue('channel.read_only', {
+        'channel_id': id, 'read_only': form_data.read_only,
+    })
+    return True
+
+
+class ChannelArchiveForm(BaseModel):
+    archived: bool
+
+
+@router.post('/{id}/archive', response_model=bool)
+async def set_channel_archive(
+    id: str,
+    form_data: ChannelArchiveForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    await rc_sync_queue.enqueue('channel.archive', {
+        'channel_id': id, 'archived': form_data.archived,
+    })
+    return True
+
+
+class ChannelJoinCodeForm(BaseModel):
+    join_code: str = ''
+
+
+@router.post('/{id}/join-code', response_model=bool)
+async def set_channel_join_code(
+    id: str,
+    form_data: ChannelJoinCodeForm,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    await rc_sync_queue.enqueue('channel.join_code', {
+        'channel_id': id, 'join_code': form_data.join_code,
+    })
+    return True
+
+
+class ChannelDefaultForm(BaseModel):
+    default: bool
+
+
+@router.post('/{id}/default', response_model=bool)
+async def set_channel_default(
+    id: str,
+    form_data: ChannelDefaultForm,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    await rc_sync_queue.enqueue('channel.default', {
+        'channel_id': id, 'default': form_data.default,
+    })
+    return True
+
+
+class ChannelRoleForm(BaseModel):
+    user_id: str
+    role: str = 'moderator'   # owner | moderator | leader
+    action: str = 'add'        # add | remove
+
+
+@router.post('/{id}/roles', response_model=bool)
+async def set_channel_role(
+    id: str,
+    form_data: ChannelRoleForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    if form_data.role not in ('owner', 'moderator', 'leader'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='role must be owner, moderator, or leader')
+    if form_data.action not in ('add', 'remove'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='action must be add or remove')
+
+    await rc_sync_queue.enqueue('channel.role', {
+        'channel_id': id,
+        'user_id': form_data.user_id,
+        'role': form_data.role,
+        'action': form_data.action,
+    })
+    return True
+
+
+class ChannelMemberRCForm(BaseModel):
+    user_id: str
+    action: str = 'add'  # add | remove
+
+
+@router.post('/{id}/rc/members', response_model=bool)
+async def set_channel_member_rc(
+    id: str,
+    form_data: ChannelMemberRCForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if channel.user_id != user.id and user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    if form_data.action not in ('add', 'remove'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='action must be add or remove')
+
+    await rc_sync_queue.enqueue('channel.member', {
+        'channel_id': id,
+        'user_id': form_data.user_id,
+        'action': form_data.action,
+    })
+    return True
+
+
+############################
+# Video conferencing (Phase 9.1 — Jitsi / BBB)
+############################
+
+
+@router.post('/{id}/video-call', response_model=dict)
+async def start_channel_video_call(
+    id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Start a Jitsi (or BigBlueButton) video call in this channel via Rocket.Chat.
+
+    The response includes a usable URL the client can put in an iframe or
+    open in a new tab. Falls back to JITSI_URL if RC's video plugin isn't
+    configured.
+    """
+    from open_webui.env import JITSI_URL
+    from open_webui.utils.rocketchat import is_configured, get_client
+    from open_webui.utils.rocketchat_sync import _rc_channel_name
+
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    if channel.type in ['group', 'dm']:
+        if not await Channels.is_user_channel_member(channel.id, user.id, db=db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
+
+    rc_room_id = (channel.data or {}).get('rocketchat_room_id') if channel.data else None
+
+    payload: dict = {'channel_id': id, 'channel_name': channel.name}
+
+    if rc_room_id and is_configured():
+        try:
+            data = await get_client().start_video_conference(rc_room_id, allow_ringing=True)
+            if data:
+                payload['rc_call'] = data
+                if data.get('url'):
+                    payload['url'] = data['url']
+                elif data.get('callId'):
+                    payload['call_id'] = data['callId']
+        except Exception as e:
+            log.warning('RC video conference start failed: %s', e)
+
+    if 'url' not in payload and JITSI_URL:
+        # Fallback to a deterministic Jitsi room name derived from the channel
+        room_slug = _rc_channel_name(channel.name) or channel.id
+        payload['url'] = f'{JITSI_URL.rstrip("/")}/openwebui-{room_slug}'
+        payload['provider'] = 'jitsi'
+
+    if 'url' not in payload and 'rc_call' not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail='No video call provider configured. Set JITSI_URL or enable RC video conferencing.',
+        )
+
+    return payload
 
 
 ############################
@@ -1393,6 +1813,20 @@ async def pin_channel_message(
         await Messages.update_is_pinned_by_id(message_id, form_data.is_pinned, user.id, db=db)
         message = await Messages.get_message_by_id(message_id, db=db)
         message_user = await Users.get_user_by_id(message.user_id, db=db)
+
+        # Propagate the pin / unpin to Rocket.Chat if this message has an RC id.
+        rc_msg_id = (message.data or {}).get('rocketchat_message_id') if message.data else None
+        try:
+            from open_webui.utils.rocketchat import is_configured, get_client
+            if rc_msg_id and is_configured():
+                rc = get_client()
+                if form_data.is_pinned:
+                    await rc.pin_message(rc_msg_id)
+                else:
+                    await rc.unpin_message(rc_msg_id)
+        except Exception as exc:
+            log.warning('RC pin propagation failed (msg=%s): %s', rc_msg_id, exc)
+
         return MessageUserResponse(
             **{
                 **message.model_dump(),
@@ -1504,6 +1938,16 @@ async def update_message_by_id(
         message = await Messages.get_message_by_id(message_id, db=db)
 
         if message:
+            # Propagate the edit to RC if this message has an RC id.
+            rc_msg_id = (message.data or {}).get('rocketchat_message_id') if message.data else None
+            rc_room_id = (message.data or {}).get('rocketchat_room_id') if message.data else None
+            try:
+                from open_webui.utils.rocketchat import is_configured, get_client
+                if rc_msg_id and rc_room_id and is_configured():
+                    await get_client().update_message(rc_room_id, rc_msg_id, message.content)
+            except Exception as exc:
+                log.warning('RC message update propagation failed (msg=%s): %s', rc_msg_id, exc)
+
             await sio.emit(
                 'events:channel',
                 {
@@ -1571,6 +2015,15 @@ async def add_reaction_to_message(
     try:
         await Messages.add_reaction_to_message(message_id, user.id, form_data.name, db=db)
         message = await Messages.get_message_by_id(message_id, db=db)
+
+        # Propagate to RC.
+        rc_msg_id = (message.data or {}).get('rocketchat_message_id') if message.data else None
+        try:
+            from open_webui.utils.rocketchat import is_configured, get_client
+            if rc_msg_id and is_configured():
+                await get_client().react_to_message(rc_msg_id, f':{form_data.name.strip(":")}:', should_react=True)
+        except Exception as exc:
+            log.warning('RC reaction add propagation failed (msg=%s): %s', rc_msg_id, exc)
 
         await sio.emit(
             'events:channel',
@@ -1640,6 +2093,15 @@ async def remove_reaction_by_id_and_user_id_and_name(
 
         message = await Messages.get_message_by_id(message_id, db=db)
 
+        # Propagate to RC.
+        rc_msg_id = (message.data or {}).get('rocketchat_message_id') if message.data else None
+        try:
+            from open_webui.utils.rocketchat import is_configured, get_client
+            if rc_msg_id and is_configured():
+                await get_client().react_to_message(rc_msg_id, f':{form_data.name.strip(":")}:', should_react=False)
+        except Exception as exc:
+            log.warning('RC reaction remove propagation failed (msg=%s): %s', rc_msg_id, exc)
+
         await sio.emit(
             'events:channel',
             {
@@ -1708,6 +2170,17 @@ async def delete_message_by_id(
 
     try:
         await Messages.delete_message_by_id(message_id, db=db)
+
+        # Propagate to RC.
+        rc_msg_id = (message.data or {}).get('rocketchat_message_id') if message.data else None
+        rc_room_id = (message.data or {}).get('rocketchat_room_id') if message.data else None
+        try:
+            from open_webui.utils.rocketchat import is_configured, get_client
+            if rc_msg_id and rc_room_id and is_configured():
+                await get_client().delete_message(rc_room_id, rc_msg_id, as_user=False)
+        except Exception as exc:
+            log.warning('RC message delete propagation failed (msg=%s): %s', rc_msg_id, exc)
+
         await sio.emit(
             'events:channel',
             {

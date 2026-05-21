@@ -1097,3 +1097,8 @@ JITSI_URL = os.environ.get('JITSI_URL', '')
 # Example: chat.example.com  (RC exposes @user:chat.example.com and #room:chat.example.com)
 # Leave empty to disable the federation info UI in Open WebUI.
 MATRIX_HOMESERVER_DOMAIN = os.environ.get('MATRIX_HOMESERVER_DOMAIN', '')
+
+# Persistent sync queue working directory. Pending Rocket.Chat sync jobs and
+# the dead-letter file are stored here; they survive restarts.
+# Defaults to <DATA_DIR>/rc_sync_queue when unset.
+RC_SYNC_QUEUE_DIR = os.environ.get('RC_SYNC_QUEUE_DIR', '')

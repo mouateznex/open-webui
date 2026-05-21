@@ -75,6 +75,7 @@ class RocketChatBridge:
         await self._build_user_map()
         await self._subscribe_existing_channels()
         await self._subscribe_presence()
+        await self._subscribe_unread_counts()
         self._running = True
         log.info('Rocket.Chat real-time bridge running')
 
@@ -189,6 +190,70 @@ class RocketChatBridge:
             log.warning('Bridge _apply_presence error for user %s: %s', ow_user_id, e)
 
     # ------------------------------------------------------------------
+    # Subscription management — unread counts & badges (Phase 5.3)
+    # ------------------------------------------------------------------
+
+    async def _subscribe_unread_counts(self) -> None:
+        """
+        Subscribe to per-user notifications via stream-notify-user.
+
+        RC's stream-notify-user fires events like:
+          - "subscriptions-changed"  (unread count / badge updates)
+          - "rooms-changed"          (last-message timestamps)
+          - "notification"           (mention pings)
+
+        We forward each event to the matching OW user's Socket.IO room so the
+        sidebar badge updates in real time.
+        """
+        if not self._ddp or not self._ddp.connected:
+            return
+
+        # Subscribe individually for every OW user we know about. RC's notify-user
+        # stream is keyed by rc_user_id/eventName, so we need one subscription
+        # per (rc_user_id, eventName) pair.
+        for rc_uid in list(self._rc_to_ow_user.keys()):
+            for ev in ('subscriptions-changed', 'rooms-changed', 'notification'):
+                try:
+                    await self._ddp.subscribe(
+                        'stream-notify-user',
+                        [f'{rc_uid}/{ev}', {'useCollection': False, 'args': []}],
+                        self._on_user_notification,
+                    )
+                except Exception as e:
+                    log.debug('Bridge unread subscribe error (%s/%s): %s', rc_uid, ev, e)
+        log.info('Bridge subscribed to stream-notify-user for %d users', len(self._rc_to_ow_user))
+
+    async def _on_user_notification(self, data: dict) -> None:
+        """Forward an RC user notification to the OW Socket.IO room of that user."""
+        if data.get('collection') != 'stream-notify-user':
+            return
+
+        fields = data.get('fields') or {}
+        event_name = fields.get('eventName') or ''
+        # eventName is "<rc_user_id>/<event-type>"
+        rc_user_id = event_name.split('/', 1)[0] if '/' in event_name else None
+        if not rc_user_id:
+            return
+        ow_user_id = self._rc_to_ow_user.get(rc_user_id)
+        if not ow_user_id:
+            return
+
+        args = fields.get('args') or []
+        try:
+            from open_webui.socket.main import sio
+            # Always emit the raw RC payload — it carries unread/userMentions/etc.
+            await sio.emit(
+                'rocketchat:notification',
+                {
+                    'event': event_name.split('/', 1)[1] if '/' in event_name else event_name,
+                    'args': args,
+                },
+                to=f'user:{ow_user_id}',
+            )
+        except Exception as e:
+            log.warning('Bridge _on_user_notification emit error: %s', e)
+
+    # ------------------------------------------------------------------
     # RC → OW (inbound messages)
     # ------------------------------------------------------------------
 
@@ -293,6 +358,9 @@ class RocketChatBridge:
         Forward an Open WebUI message to Rocket.Chat.
         The ow_origin custom field prevents the DDP echo from being re-stored.
         Uses the REST API — independent of whether the DDP bridge is running.
+
+        On success, the RC message ID is stored back on the OW message so
+        later edits/pins/reactions can target the correct RC message.
         """
         from open_webui.models.channels import Channels
         from open_webui.utils.rocketchat import get_client, is_configured
@@ -307,11 +375,32 @@ class RocketChatBridge:
 
         try:
             rc = get_client()
-            await rc.send_message(
+            rc_msg = await rc.send_message(
                 room_id=room_id,
                 text=content,
                 custom_fields={_OW_ORIGIN_FIELD: True, 'ow_message_id': ow_message_id},
             )
+            rc_msg_id = (rc_msg or {}).get('_id')
+            if rc_msg_id:
+                # Persist the RC ID on the OW message so later edits/pins/etc
+                # can find the matching RC message.
+                try:
+                    from open_webui.models.messages import Messages
+                    existing = await Messages.get_message_by_id(ow_message_id)
+                    if existing:
+                        merged = {**(existing.data or {}),
+                                  'rocketchat_message_id': rc_msg_id,
+                                  'rocketchat_room_id': room_id}
+                        from open_webui.internal.db import get_async_db_context
+                        from open_webui.models.messages import Message
+                        from sqlalchemy import update as sa_update
+                        async with get_async_db_context() as db:
+                            await db.execute(
+                                sa_update(Message).where(Message.id == ow_message_id).values(data=merged)
+                            )
+                            await db.commit()
+                except Exception as e:
+                    log.debug('forward_to_rc: could not persist rc_msg_id (%s)', e)
         except Exception as e:
             log.warning('Bridge forward_to_rc failed for channel %s: %s', channel_id, e)
 

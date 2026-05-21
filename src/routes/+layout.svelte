@@ -853,6 +853,19 @@
 	onMount(async () => {
 		window.addEventListener('message', windowMessageEventHandler);
 
+		// Register the PWA service worker so /teams, /search, /channels, /admin/users
+		// and other newly-added routes are cached for offline shell rendering.
+		// The old behavior — unregister-on-version-mismatch — still happens above
+		// in beforeNavigate; we just (re)register fresh after each load so we
+		// pick up any new shell URLs.
+		if ('serviceWorker' in navigator) {
+			try {
+				await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+			} catch (err) {
+				console.warn('Service worker registration failed:', err);
+			}
+		}
+
 		let touchstartY = 0;
 
 		function isNavOrDescendant(el) {

@@ -108,6 +108,7 @@ from open_webui.routers import (
     calendar,
     oauth_server,
     rocketchat_integrations,
+    rocketchat_extras,
 )
 
 from open_webui.routers.retrieval import (
@@ -749,6 +750,12 @@ async def lifespan(app: FastAPI):
     from open_webui.utils import rocketchat as rc
     rc.init(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
 
+    # Persistent sync queue — reads pending jobs off disk and starts retrying.
+    # Importing rocketchat_sync side-effect-registers all handlers with the queue.
+    from open_webui.utils import rocketchat_sync as _rc_sync_handlers  # noqa: F401
+    from open_webui.utils import rc_sync_queue
+    await rc_sync_queue.start()
+
     # Rocket.Chat real-time bridge — DDP WebSocket connection with retry/backoff
     from open_webui.utils.rocketchat_bridge import get_bridge
     if rc.is_configured():
@@ -789,6 +796,10 @@ async def lifespan(app: FastAPI):
     # Stop the Rocket.Chat real-time bridge
     from open_webui.utils.rocketchat_bridge import get_bridge
     await get_bridge().stop()
+
+    # Stop the persistent sync queue worker (drains in-flight job retries).
+    from open_webui.utils import rc_sync_queue
+    await rc_sync_queue.stop()
 
     # Close the Rocket.Chat HTTP client cleanly
     from open_webui.utils import rocketchat as rc
@@ -1475,6 +1486,10 @@ app.include_router(oauth_server.router, tags=['oauth-server'])
 # Rocket.Chat Integrations — outgoing webhook / slash command handler.
 # Endpoint: POST /rocketchat/slash
 app.include_router(rocketchat_integrations.router, tags=['rocketchat'])
+
+# Rocket.Chat Extras — teams, message parity, files, presence, omnichannel,
+# audit, federated search, webhooks, apps, bot/AI posting.
+app.include_router(rocketchat_extras.router, prefix='/api/v1', tags=['rocketchat-extras'])
 
 app.include_router(ollama.router, prefix='/ollama', tags=['ollama'])
 app.include_router(openai.router, prefix='/openai', tags=['openai'])

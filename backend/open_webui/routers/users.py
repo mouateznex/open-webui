@@ -41,6 +41,7 @@ from open_webui.utils.auth import (
     validate_password,
 )
 from open_webui.utils import rocketchat_sync as rc_sync
+from open_webui.utils import rc_sync_queue
 from open_webui.utils.access_control import get_permissions, has_permission
 from open_webui.socket.main import disconnect_user_sessions
 
@@ -359,7 +360,10 @@ async def update_user_status_by_session_user(
     # user already fetched by get_verified_user — no need to refetch
     updated = await Users.update_user_status_by_id(user.id, form_data, db=db)
     if updated:
-        asyncio.create_task(rc_sync.sync_user_status(updated, status_message=form_data.status_message))
+        await rc_sync_queue.enqueue('user.status', {
+            'user_id': updated.id,
+            'status_message': form_data.status_message,
+        })
         return updated
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -608,11 +612,18 @@ async def update_user_by_id(
             # privileges cached in SESSION_POOL are invalidated.
             if updated_user.role != user.role:
                 await disconnect_user_sessions(user_id)
-                asyncio.create_task(rc_sync.sync_user_role(updated_user))
+                # Persistent retry — RC outage will be retried automatically.
+                await rc_sync_queue.enqueue('user.role', {'user_id': updated_user.id})
 
-            # Sync name / email changes to Rocket.Chat
-            if form_data.name is not None or form_data.email is not None:
-                asyncio.create_task(rc_sync.sync_user_profile(updated_user))
+            # Sync name / email / avatar changes to Rocket.Chat. Avatar is
+            # included so admin-side profile-image edits propagate too (this
+            # was previously missing).
+            if (
+                form_data.name is not None
+                or form_data.email is not None
+                or form_data.profile_image_url is not None
+            ):
+                await rc_sync_queue.enqueue('user.profile', {'user_id': updated_user.id})
 
             return updated_user
 
@@ -659,7 +670,13 @@ async def delete_user_by_id(user_id: str, user=Depends(get_admin_user), db: Asyn
         if result:
             await disconnect_user_sessions(user_id)
             if target_user:
-                asyncio.create_task(rc_sync.delete_user(target_user))
+                # Snapshot the data needed by the queue handler (the OW row
+                # has just been deleted, so we cannot refetch it from there).
+                await rc_sync_queue.enqueue('user.delete', {
+                    'user_id': target_user.id,
+                    'email': target_user.email,
+                    'rc_user_id': (target_user.info or {}).get('rocketchat_user_id'),
+                })
             return True
 
         raise HTTPException(
@@ -675,7 +692,7 @@ async def delete_user_by_id(user_id: str, user=Depends(get_admin_user), db: Asyn
 
 
 ############################
-# RocketChat User Active Status
+# Rocket.Chat Moderation Surface
 ############################
 
 
@@ -690,6 +707,7 @@ async def set_rocketchat_user_active(
     session_user=Depends(get_admin_user),
     db: AsyncSession = Depends(get_async_session),
 ):
+    """Soft suspend / restore — login disabled, account preserved."""
     from open_webui.utils.rocketchat import is_configured
 
     if not is_configured():
@@ -699,8 +717,120 @@ async def set_rocketchat_user_active(
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.USER_NOT_FOUND)
 
-    await rc_sync.set_user_active(target_user, form_data.active)
+    await rc_sync_queue.enqueue('user.active', {
+        'user_id': target_user.id,
+        'active': form_data.active,
+    })
     return True
+
+
+@router.post('/{user_id}/rocketchat/deactivate', response_model=bool)
+async def deactivate_rocketchat_user(
+    user_id: str,
+    session_user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Hard deactivate — kicks the user from every room and revokes login."""
+    from open_webui.utils.rocketchat import is_configured
+
+    if not is_configured():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Rocket.Chat is not configured')
+
+    target_user = await Users.get_user_by_id(user_id, db=db)
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.USER_NOT_FOUND)
+
+    if session_user.id == user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACTION_PROHIBITED)
+
+    await rc_sync_queue.enqueue('user.deactivate', {'user_id': target_user.id})
+    return True
+
+
+class RocketChatPreferencesForm(BaseModel):
+    preferences: dict
+
+
+@router.post('/{user_id}/rocketchat/preferences', response_model=bool)
+async def set_rocketchat_user_preferences(
+    user_id: str,
+    form_data: RocketChatPreferencesForm,
+    session_user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Mirror notification settings into Rocket.Chat (mobile push, sound,
+    desktop notifications, etc.). Self-service for the verified user;
+    admins may push prefs onto any user.
+    """
+    if user_id != session_user.id and session_user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    target_user = await Users.get_user_by_id(user_id, db=db)
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.USER_NOT_FOUND)
+
+    await rc_sync_queue.enqueue('user.preferences', {
+        'user_id': user_id,
+        'preferences': form_data.preferences or {},
+    })
+    return True
+
+
+class RocketChatPushTokenForm(BaseModel):
+    token: str
+    platform: str = 'gcm'   # 'gcm' (Android) or 'apn' (iOS)
+    app_name: str = 'open-webui'
+
+
+@router.post('/{user_id}/rocketchat/push/register', response_model=bool)
+async def register_rocketchat_push_token(
+    user_id: str,
+    form_data: RocketChatPushTokenForm,
+    session_user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Register a mobile push token with Rocket.Chat's gateway."""
+    if user_id != session_user.id and session_user.role != 'admin':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.UNAUTHORIZED)
+
+    if not form_data.token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Missing push token')
+
+    if form_data.platform not in ('gcm', 'apn'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='platform must be gcm or apn')
+
+    await rc_sync_queue.enqueue('user.push_register', {
+        'user_id': user_id,
+        'token': form_data.token,
+        'platform': form_data.platform,
+        'app_name': form_data.app_name,
+    })
+    return True
+
+
+@router.get('/rocketchat/queue/stats')
+async def get_rocketchat_queue_stats(user=Depends(get_admin_user)):
+    """Admin diagnostics — how many sync jobs are pending / dead."""
+    return {
+        'queue': await rc_sync_queue.stats(),
+        'dead_letter_count': len(await rc_sync_queue.get_queue().list_dead()),
+    }
+
+
+@router.get('/rocketchat/queue/jobs')
+async def get_rocketchat_queue_jobs(user=Depends(get_admin_user), limit: int = 100):
+    """Inspect pending and dead-letter sync jobs."""
+    return {
+        'pending': await rc_sync_queue.get_queue().list_jobs(limit=limit),
+        'dead': await rc_sync_queue.get_queue().list_dead(limit=limit),
+    }
+
+
+@router.post('/rocketchat/queue/replay-dead', response_model=int)
+async def replay_dead_rocketchat_jobs(user=Depends(get_admin_user)):
+    """Move every dead-letter job back to the live queue."""
+    return await rc_sync_queue.get_queue().replay_dead()
 
 
 ############################
