@@ -774,6 +774,63 @@ async def get_channel_messages(
 
 
 ############################
+# SearchChannelMessages
+############################
+
+
+@router.get('/{id}/messages/search', response_model=list[MessageUserResponse])
+async def search_channel_messages(
+    request: Request,
+    id: str,
+    q: str,
+    limit: int = 50,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    await check_channels_access(request, user)
+    channel = await Channels.get_channel_by_id(id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    if channel.type in ['group', 'dm']:
+        if not await Channels.is_user_channel_member(channel.id, user.id, db=db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
+    else:
+        if user.role != 'admin' and not await channel_has_access(user.id, channel, permission='read', db=db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
+
+    if not q or not q.strip():
+        return []
+
+    message_list = await Messages.search_messages_by_channel_ids([id], q.strip(), limit=min(limit, 100), db=db)
+    if not message_list:
+        return []
+
+    user_ids = list(set(m.user_id for m in message_list))
+    fetched_users = {u.id: u for u in await Users.get_users_by_user_ids(user_ids, db=db)}
+
+    results = []
+    for message in message_list:
+        user_info = message.user
+        if user_info is None and message.user_id in fetched_users:
+            user_info = UserNameResponse(**fetched_users[message.user_id].model_dump())
+
+        results.append(
+            MessageUserResponse(
+                **{
+                    **message.model_dump(),
+                    'reply_count': 0,
+                    'latest_reply_at': None,
+                    'reactions': [],
+                    'user': user_info,
+                }
+            )
+        )
+
+    return results
+
+
+############################
 # GetPinnedChannelMessages
 ############################
 

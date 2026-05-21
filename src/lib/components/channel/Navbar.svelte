@@ -20,11 +20,13 @@
 	import Users from '../icons/Users.svelte';
 	import Pin from '../icons/Pin.svelte';
 	import PinnedMessagesModal from './PinnedMessagesModal.svelte';
+	import SearchModal from './SearchModal.svelte';
 
 	const i18n = getContext('i18n');
 
 	let showChannelPinnedMessagesModal = false;
 	let showChannelInfoModal = false;
+	let showSearchModal = false;
 
 	const hasPublicReadGrant = (grants: any) =>
 		Array.isArray(grants) &&
@@ -53,6 +55,7 @@
 
 <PinnedMessagesModal bind:show={showChannelPinnedMessagesModal} {channel} {onPin} />
 <ChannelInfoModal bind:show={showChannelInfoModal} {channel} {onUpdate} />
+<SearchModal bind:show={showSearchModal} {channel} />
 <nav class="sticky top-0 z-30 w-full px-1.5 py-1 -mb-8 flex items-center drag-region flex flex-col">
 	<div
 		id="navbar-bg-gradient-to-b"
@@ -157,6 +160,32 @@
 				class="self-start flex flex-none items-center text-gray-600 dark:text-gray-400 gap-1 shrink-0"
 			>
 				{#if channel}
+					<Tooltip content={$i18n.t('Search Messages')}>
+						<button
+							class=" flex cursor-pointer py-1.5 px-1.5 border dark:border-gray-850 border-gray-50 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-850 transition"
+							aria-label="Search Messages"
+							type="button"
+							on:click={() => {
+								showSearchModal = true;
+							}}
+						>
+							<div class=" flex items-center gap-0.5 m-auto self-center shrink-0">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 20 20"
+									fill="currentColor"
+									class="size-4"
+								>
+									<path
+										fill-rule="evenodd"
+										d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
+										clip-rule="evenodd"
+									/>
+								</svg>
+							</div>
+						</button>
+					</Tooltip>
+
 					<Tooltip content={$i18n.t('Pinned Messages')}>
 						<button
 							class=" flex cursor-pointer py-1.5 px-1.5 border dark:border-gray-850 border-gray-50 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-850 transition"

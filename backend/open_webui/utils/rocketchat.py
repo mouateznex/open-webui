@@ -245,6 +245,11 @@ class RocketChatClient:
         body = await self._post('chat.sendMessage', {'message': payload})
         return body.get('message', {})
 
+    async def search_messages(self, room_id: str, query: str, count: int = 50) -> list:
+        """Full-text search within a Rocket.Chat room via chat.search."""
+        body = await self._get('chat.search', {'roomId': room_id, 'searchText': query, 'count': count})
+        return body.get('messages', [])
+
     # ------------------------------------------------------------------
     # Presence / status (used by Phase 5)
     # ------------------------------------------------------------------
