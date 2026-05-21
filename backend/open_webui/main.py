@@ -541,7 +541,10 @@ from open_webui.env import (
     OAUTH_SERVER_CLIENT_SECRET,
     OAUTH_SERVER_REDIRECT_URIS,
     # Rocket.Chat Integration
+    ROCKETCHAT_ENABLED,
     ROCKETCHAT_URL,
+    ROCKETCHAT_INTERNAL_URL,
+    ROCKETCHAT_BASE_URL,
     ROCKETCHAT_ADMIN_USER,
     ROCKETCHAT_ADMIN_PASSWORD,
     ROCKETCHAT_SLASH_TOKEN,
@@ -747,9 +750,18 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             log.warning(f'Failed to initialize tool/terminal servers at startup: {e}')
 
-    # Rocket.Chat integration — initialise the shared API client if configured
+    # Rocket.Chat integration — initialise the shared API client if configured.
+    # ROCKETCHAT_ENABLED controls activation:
+    #   True  → always enable (raise at startup if credentials are missing)
+    #   False → always disable
+    #   None  → auto-detect: enable when ROCKETCHAT_INTERNAL_URL + credentials are set
     from open_webui.utils import rocketchat as rc
-    rc.init(ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
+    _rc_should_init = (
+        ROCKETCHAT_ENABLED is True
+        or (ROCKETCHAT_ENABLED is None and bool(ROCKETCHAT_INTERNAL_URL and ROCKETCHAT_ADMIN_USER and ROCKETCHAT_ADMIN_PASSWORD))
+    )
+    if _rc_should_init:
+        rc.init(ROCKETCHAT_INTERNAL_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD)
 
     # Persistent sync queue — reads pending jobs off disk and starts retrying.
     # Importing rocketchat_sync side-effect-registers all handlers with the queue.
@@ -768,7 +780,7 @@ async def lifespan(app: FastAPI):
                     return
                 try:
                     await bridge.start(
-                        ROCKETCHAT_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD
+                        ROCKETCHAT_INTERNAL_URL, ROCKETCHAT_ADMIN_USER, ROCKETCHAT_ADMIN_PASSWORD
                     )
                 except Exception as exc:
                     log.warning('Bridge start error (attempt %d/8): %s', attempt + 1, exc)
@@ -2276,6 +2288,7 @@ async def stop_tasks_by_chat_id_endpoint(request: Request, chat_id: str, user=De
 
 @app.get('/api/config')
 async def get_app_config(request: Request):
+    from open_webui.utils import rocketchat as rc  # noqa: PLC0415
     user = None
     token = None
 
@@ -2347,7 +2360,8 @@ async def get_app_config(request: Request):
                     'enable_admin_export': ENABLE_ADMIN_EXPORT,
                     'enable_admin_chat_access': ENABLE_ADMIN_CHAT_ACCESS,
                     'enable_admin_analytics': ENABLE_ADMIN_ANALYTICS,
-                    'rocketchat_enabled': bool(ROCKETCHAT_URL and ROCKETCHAT_ADMIN_USER and ROCKETCHAT_ADMIN_PASSWORD),
+                    'rocketchat_enabled': rc.is_configured(),
+                    'rocketchat_base_url': ROCKETCHAT_BASE_URL or None,
                     'rocketchat_slash_enabled': bool(ROCKETCHAT_SLASH_TOKEN),
                     'jitsi_url': JITSI_URL,
                     'web_push_vapid_public_key': VAPID_PUBLIC_KEY or None,

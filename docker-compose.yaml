@@ -33,8 +33,17 @@ services:
       - 'OAUTH_SERVER_CLIENT_SECRET=${OAUTH_SERVER_CLIENT_SECRET:?OAUTH_SERVER_CLIENT_SECRET must be set in environment or .env}'
       # Must match the callback URL configured in Rocket.Chat's Custom OAuth settings
       - 'OAUTH_SERVER_REDIRECT_URIS=${OAUTH_SERVER_REDIRECT_URIS-http://localhost:3100/_oauth/openwebui}'
-      # Rocket.Chat API client — internal service-to-service URL and admin credentials
-      - 'ROCKETCHAT_URL=http://rocketchat:3000'
+      # Rocket.Chat feature flag — set to "false" to disable the integration even
+      # when credentials are present; leave unset for auto-detection (default).
+      - 'ROCKETCHAT_ENABLED=${ROCKETCHAT_ENABLED-}'
+      # Container-to-container (internal) URL the Open WebUI backend uses for
+      # REST + DDP API calls.  Never exposed to browsers.
+      - 'ROCKETCHAT_INTERNAL_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
+      # Browser-facing (public) URL — used to generate deep-links shown to users.
+      # Defaults to ROCKETCHAT_INTERNAL_URL when unset, which is fine for local dev.
+      - 'ROCKETCHAT_BASE_URL=${ROCKETCHAT_BASE_URL-http://localhost:3100}'
+      # Legacy alias — kept for backwards compatibility with older configs.
+      - 'ROCKETCHAT_URL=${ROCKETCHAT_INTERNAL_URL-http://rocketchat:3000}'
       - 'ROCKETCHAT_ADMIN_USER=${ROCKETCHAT_ADMIN_USER-rc_admin}'
       - 'ROCKETCHAT_ADMIN_PASSWORD=${ROCKETCHAT_ADMIN_PASSWORD:?ROCKETCHAT_ADMIN_PASSWORD must be set in environment or .env}'
       # Rocket.Chat outgoing webhook token for /rocketchat/slash (AI slash commands)

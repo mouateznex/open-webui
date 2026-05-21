@@ -1073,9 +1073,35 @@ DEFAULT_GROUP_SHARE_PERMISSION = 'members' if _default_group_share == 'members' 
 # Rocket.Chat Integration
 ####################################
 
+# Master feature flag.  Set to "true" to enable the integration even when
+# ROCKETCHAT_INTERNAL_URL / credentials would otherwise auto-enable it, or set
+# to "false" to force-disable it regardless of other settings.
+# When unset the integration is enabled automatically whenever
+# ROCKETCHAT_INTERNAL_URL (or legacy ROCKETCHAT_URL) and credentials are set.
+_rc_enabled_env = os.environ.get('ROCKETCHAT_ENABLED', '').strip().lower()
+ROCKETCHAT_ENABLED: bool | None = (
+    True if _rc_enabled_env == 'true' else
+    False if _rc_enabled_env == 'false' else
+    None  # auto-detect from credentials
+)
+
 # Internal URL used by Open WebUI's backend to reach the Rocket.Chat API.
-# In Docker Compose this is the service name; in production use the private URL.
-ROCKETCHAT_URL = os.environ.get('ROCKETCHAT_URL', '')
+# In Docker Compose this is the container-to-container URL (service name).
+# In production use the private/internal network address.
+# ROCKETCHAT_URL is kept as a legacy alias; ROCKETCHAT_INTERNAL_URL takes precedence.
+ROCKETCHAT_INTERNAL_URL = (
+    os.environ.get('ROCKETCHAT_INTERNAL_URL', '')
+    or os.environ.get('ROCKETCHAT_URL', '')
+)
+# Legacy alias — kept so existing configs and callers that import ROCKETCHAT_URL directly
+# still work without change.
+ROCKETCHAT_URL = ROCKETCHAT_INTERNAL_URL
+
+# Browser-facing (public) URL of Rocket.Chat — used to generate deep-links,
+# "Open in Rocket.Chat" buttons, and embed URLs shown to end users.
+# Distinct from ROCKETCHAT_INTERNAL_URL when running behind a reverse proxy.
+# Example: https://chat.example.com
+ROCKETCHAT_BASE_URL = os.environ.get('ROCKETCHAT_BASE_URL', ROCKETCHAT_INTERNAL_URL)
 
 # Service-account credentials — a dedicated admin bot, not a real user account.
 ROCKETCHAT_ADMIN_USER = os.environ.get('ROCKETCHAT_ADMIN_USER', '')
